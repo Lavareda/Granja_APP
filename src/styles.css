@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #17211b;
+  background: #f6f7f2;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+@layer components {
+  .field-input {
+    @apply h-14 w-full rounded-lg border border-stone-300 bg-white px-4 text-base font-medium text-farm-ink outline-none transition placeholder:text-stone-400 focus:border-farm-green focus:ring-4 focus:ring-farm-lime/70;
+  }
+}
