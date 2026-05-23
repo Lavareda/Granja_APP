@@ -248,7 +248,6 @@ function App() {
     setRecords((current) => [...current, newRecord]);
     setForm({ ...initialForm, data: form.data, lote: form.lote });
     setShowSuccess(true);
-    setPage("dashboard");
   }
 
   return (
