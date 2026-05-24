@@ -1004,7 +1004,7 @@ function DashboardPage({
         <StatCard icon={BadgeDollarSign} label="Lucro diário estimado" value={formatCurrency(dashboard.estimatedDailyProfit)} detail="Receita de ovos menos ração e perdas" />
         <StatCard icon={CalendarDays} label="Idade do lote" value={`${dashboard.flockAgeWeeks} semanas`} detail={`Fase automática: ${dashboard.productionPhase}`} />
         <StatCard icon={TrendingUp} label="Curva esperada" value={formatPercent(dashboard.expectedProductionSeries[dashboard.expectedProductionSeries.length - 1]?.value ?? 0)} detail="Meta técnica pela idade do lote" />
-        <StatCard icon={ThermometerSun} label="Temperatura" value={latestRecord ? `${formatNumber(latestRecord.temperatura, 1)} °C` : "0,0 °C"} detail="Ãšltimo lançamento" />
+        <StatCard icon={ThermometerSun} label="Temperatura" value={latestRecord ? `${formatNumber(latestRecord.temperatura, 1)} °C` : "0,0 °C"} detail="Último lançamento" />
       </section>
 
       <FlockSizeCard flockSize={flockSize} onSave={updateFlockSize} />
@@ -1043,7 +1043,7 @@ function DashboardPage({
           <BarChart data={dashboard.mortalitySeries} color="bg-farm-clay" unit="aves" />
         </ChartPanel>
         <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold">Ãšltimo lançamento</h2>
+          <h2 className="text-lg font-semibold">Último lançamento</h2>
           {latestRecord ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <InfoRow label="Data" value={latestRecord.data} />
@@ -1187,7 +1187,7 @@ function CsvPage() {
                 <th className="px-4 py-3">Quebrados</th>
                 <th className="px-4 py-3">Mortalidade</th>
                 <th className="px-4 py-3">Ração kg</th>
-                <th className="px-4 py-3">Ã�gua</th>
+                <th className="px-4 py-3">Água</th>
                 <th className="px-4 py-3">Temp.</th>
               </tr>
             </thead>
@@ -1260,10 +1260,10 @@ const mapAreas: MapArea[] = [
   },
   {
     id: "ovos",
-    name: "Ã�rea de ovos",
+    name: "Área de ovos",
     className: "left-[39%] bottom-[16%] h-[22%] w-[22%] bg-farm-sky",
     summary: {
-      title: "Ã�rea de ovos",
+      title: "Área de ovos",
       production: "3.588 ovos recebidos",
       status: "44 ovos quebrados",
       details: "Classificação e conferência prontas para expedição do dia.",
