@@ -129,6 +129,21 @@ const formStorageKey = "granjaapp.dailyRecordDraft";
 const pageStorageKey = "granjaapp.currentPage";
 const today = new Date().toISOString().slice(0, 10);
 
+function pageToPath(page: Page) {
+  if (page === "dashboard") return "/painel";
+  if (page === "daily-record") return "/registro";
+  if (page === "map") return "/mapa";
+  return "/csv";
+}
+
+function pathToPage(pathname: string): Page | null {
+  if (pathname === "/" || pathname === "/painel" || pathname === "/dashboard") return "dashboard";
+  if (pathname === "/registro" || pathname === "/daily-record") return "daily-record";
+  if (pathname === "/mapa" || pathname === "/map") return "map";
+  if (pathname === "/csv") return "csv";
+  return null;
+}
+
 const initialForm: DailyRecordForm = {
   data: today,
   lote: "Lote 18",
@@ -634,7 +649,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isLogin = mode === "login";
-  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? "/dashboard";
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? "/painel";
 
   useEffect(() => {
     if (user) navigate(from, { replace: true });
@@ -765,7 +780,9 @@ function App() {
 }
 
 function AppShell() {
-  const [page, setPage] = useState<Page>(() => loadFromStorage(pageStorageKey, "dashboard", isPage));
+  const location = useLocation();
+  const initialPage = pathToPage(location.pathname) ?? loadFromStorage(pageStorageKey, "dashboard", isPage);
+  const [page, setPage] = useState<Page>(initialPage);
   const [form, setForm] = useState<DailyRecordForm>(() => ({
     ...initialForm,
     ...loadFromStorage(formStorageKey, initialForm, isDailyRecordForm),
@@ -774,13 +791,19 @@ function AppShell() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { addDailyRecord } = useFarmData();
-  const location = useLocation();
   const navigate = useNavigate();
   const { signOut, user } = useAuth();
 
   useEffect(() => {
     saveToStorage(pageStorageKey, page);
   }, [page]);
+
+  useEffect(() => {
+    const routePage = pathToPage(location.pathname);
+    if (routePage && routePage !== page) {
+      setPage(routePage);
+    }
+  }, [location.pathname, page]);
 
   useEffect(() => {
     saveToStorage(formStorageKey, form);
@@ -849,15 +872,7 @@ function AppShell() {
   function goToPage(nextPage: Page) {
     setPage(nextPage);
     setIsSidebarOpen(false);
-    navigate(
-      nextPage === "dashboard"
-        ? "/dashboard"
-        : nextPage === "daily-record"
-          ? "/daily-record"
-          : nextPage === "map"
-            ? "/map"
-            : "/csv",
-    );
+    navigate(pageToPath(nextPage));
   }
 
   const pageTitle =
