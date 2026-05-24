@@ -1,4 +1,4 @@
-﻿import { Session, User } from "@supabase/supabase-js";
+import { Session, User } from "@supabase/supabase-js";
 import { createContext, FormEvent, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -167,7 +167,7 @@ const seedRecords: DailyRecord[] = [
     racaoKg: 466,
     agua: 918,
     temperatura: 24.7,
-    observacoes: "RaÃ§Ã£o entregue no silo A.",
+    observacoes: "Ração entregue no silo A.",
   },
   {
     id: 3,
@@ -193,7 +193,7 @@ const seedRecords: DailyRecord[] = [
     racaoKg: 470,
     agua: 930,
     temperatura: 24.8,
-    observacoes: "Ventilacao ajustada no galpao 2.",
+    observacoes: "Ventilação ajustada no galpão 2.",
   },
 ];
 
@@ -214,10 +214,10 @@ const fieldLabels: Record<keyof DailyRecordForm, string> = {
   ovosQuebrados: "Ovos quebrados",
   mortalidade: "Mortalidade",
   descarte: "Descarte",
-  racaoKg: "Consumo de raÃ§Ã£o (kg)",
-  agua: "Consumo de Ã¡gua",
+  racaoKg: "Consumo de ração (kg)",
+  agua: "Consumo de água",
   temperatura: "Temperatura",
-  observacoes: "ObservaÃ§Ãµes",
+  observacoes: "Observações",
 };
 
 function parseNumber(value: string) {
@@ -255,10 +255,10 @@ function buildRecordsCsv(records: DailyRecord[]) {
     "Ovos quebrados",
     "Mortalidade",
     "Descarte",
-    "Consumo de raÃ§Ã£o kg",
-    "Consumo de Ã¡gua",
+    "Consumo de ração kg",
+    "Consumo de água",
     "Temperatura",
-    "ObservaÃ§Ãµes",
+    "Observações",
   ];
   const rows = records.map((record) => [
     record.data,
@@ -383,7 +383,7 @@ function buildAlerts({
 
   if (latestLayingPercentage < expectedLayingPercentage - 5) {
     alerts.push({
-      title: "ProduÃ§Ã£o abaixo da curva",
+      title: "Produção abaixo da curva",
       detail: `${formatPercent(latestLayingPercentage)} real vs ${formatPercent(expectedLayingPercentage)} esperado`,
       tone: "border-amber-200 bg-amber-50 text-amber-800",
     });
@@ -392,15 +392,15 @@ function buildAlerts({
   if (mortalityPercentage > 0.1) {
     alerts.push({
       title: "Mortalidade alta",
-      detail: `${formatPercent(mortalityPercentage)} no Ãºltimo lanÃ§amento`,
+      detail: `${formatPercent(mortalityPercentage)} no último lançamento`,
       tone: "border-red-200 bg-red-50 text-red-800",
     });
   }
 
   if (feedPerDozenEggs > 1.65) {
     alerts.push({
-      title: "Consumo de raÃ§Ã£o excessivo",
-      detail: `${formatNumber(feedPerDozenEggs, 2)} kg por dÃºzia de ovos`,
+      title: "Consumo de ração excessivo",
+      detail: `${formatNumber(feedPerDozenEggs, 2)} kg por dúzia de ovos`,
       tone: "border-orange-200 bg-orange-50 text-orange-800",
     });
   }
@@ -408,7 +408,7 @@ function buildAlerts({
   if (latestRecord.temperatura > 29) {
     alerts.push({
       title: "Temperatura elevada",
-      detail: `${formatNumber(latestRecord.temperatura, 1)} Â°C no galpÃ£o`,
+      detail: `${formatNumber(latestRecord.temperatura, 1)} °C no galpão`,
       tone: "border-red-200 bg-red-50 text-red-800",
     });
   }
@@ -606,7 +606,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f7f2] px-4 text-farm-ink">
         <div className="rounded-lg border border-stone-200 bg-white p-6 shadow-panel">
-          <p className="font-semibold">Carregando sessÃ£o...</p>
+          <p className="font-semibold">Carregando sessão...</p>
         </div>
       </div>
     );
@@ -662,7 +662,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         navigate(from, { replace: true });
       } else {
         await signUp(email, password);
-        setMessage("Conta criada. Verifique seu email se a confirmaÃ§Ã£o estiver ativa no Supabase.");
+        setMessage("Conta criada. Verifique seu email se a confirmação estiver ativa no Supabase.");
       }
     } catch {
       setError("Não foi possível acessar a conta. Confira os dados e tente novamente.");
@@ -679,7 +679,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
             <Tractor className="h-6 w-6" aria-hidden="true" />
           </span>
           <div>
-            <p className="text-sm font-medium text-farm-green">GranjaApp Â· SÃ­tio do Bem</p>
+            <p className="text-sm font-medium text-farm-green">GranjaApp · Sítio do Bem</p>
             <h1 className="text-2xl font-semibold">{isLogin ? "Entrar" : "Criar conta"}</h1>
           </div>
         </div>
@@ -709,7 +709,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="MÃ­nimo 6 caracteres"
+                placeholder="Mínimo 6 caracteres"
                 className="field-input pr-12"
               />
               <button
@@ -733,7 +733,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         </form>
 
         <p className="mt-5 text-center text-sm text-stone-500">
-          {isLogin ? "Ainda nÃ£o tem conta?" : "JÃ¡ tem conta?"}{" "}
+          {isLogin ? "Ainda não tem conta?" : "Já tem conta?"}{" "}
           <Link className="font-semibold text-farm-green" to={isLogin ? "/signup" : "/login"}>
             {isLogin ? "Criar conta" : "Entrar"}
           </Link>
@@ -805,7 +805,7 @@ function AppShell() {
       if (!value) {
         nextErrors[field] = `Informe ${fieldLabels[field].toLowerCase()}.`;
       } else if (Number.isNaN(numberValue) || numberValue < 0) {
-        nextErrors[field] = "Use um nÃºmero maior ou igual a zero.";
+        nextErrors[field] = "Use um número maior ou igual a zero.";
       }
     });
 
@@ -895,7 +895,7 @@ function AppShell() {
           </div>
           <div className="hidden items-center gap-2 sm:flex">
             <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">
-              {user?.email ?? "UsuÃ¡rio"}
+              {user?.email ?? "Usuário"}
             </span>
             <button
               onClick={handleLogout}
@@ -933,7 +933,7 @@ function AppShell() {
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
             <div>
               <p className="font-semibold">Registro salvo e painel atualizado.</p>
-              <p className="mt-1 text-sm">Os KPIs e grÃ¡ficos jÃ¡ refletem o Ãºltimo lanÃ§amento local.</p>
+              <p className="mt-1 text-sm">Os KPIs e gráficos já refletem o último lançamento local.</p>
             </div>
           </div>
         ) : null}
@@ -987,18 +987,18 @@ function DashboardPage({
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Feather} label="Mortalidade mensal" value={formatPercent(dashboard.mortalityPercentage)} detail={`${formatNumber(isDemoMode ? 20 : dashboard.totalMortality)} aves no mês`} />
         <StatCard icon={BadgeDollarSign} label="Lucro diário estimado" value={formatCurrency(dashboard.estimatedDailyProfit)} detail="Receita de ovos menos ração e perdas" />
-        <StatCard icon={CalendarDays} label="Idade do lote" value={`${dashboard.flockAgeWeeks} semanas`} detail={`Fase automÃ¡tica: ${dashboard.productionPhase}`} />
-        <StatCard icon={TrendingUp} label="Curva esperada" value={formatPercent(dashboard.expectedProductionSeries[dashboard.expectedProductionSeries.length - 1]?.value ?? 0)} detail="Meta tÃ©cnica pela idade do lote" />
-        <StatCard icon={ThermometerSun} label="Temperatura" value={latestRecord ? `${formatNumber(latestRecord.temperatura, 1)} Â°C` : "0,0 Â°C"} detail="Ãšltimo lanÃ§amento" />
+        <StatCard icon={CalendarDays} label="Idade do lote" value={`${dashboard.flockAgeWeeks} semanas`} detail={`Fase automática: ${dashboard.productionPhase}`} />
+        <StatCard icon={TrendingUp} label="Curva esperada" value={formatPercent(dashboard.expectedProductionSeries[dashboard.expectedProductionSeries.length - 1]?.value ?? 0)} detail="Meta técnica pela idade do lote" />
+        <StatCard icon={ThermometerSun} label="Temperatura" value={latestRecord ? `${formatNumber(latestRecord.temperatura, 1)} °C` : "0,0 °C"} detail="Último lançamento" />
       </section>
 
       <FlockSizeCard flockSize={flockSize} onSave={updateFlockSize} />
 
       <section className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
-        <ChartPanel title="ProduÃ§Ã£o de ovos" subtitle="Atualizado ao adicionar registros diÃ¡rios">
+        <ChartPanel title="Produção de ovos" subtitle="Atualizado ao adicionar registros diários">
           <LineChart data={dashboard.eggSeries} />
         </ChartPanel>
-        <ChartPanel title="Consumo de raÃ§Ã£o" subtitle="Kg por lanÃ§amento">
+        <ChartPanel title="Consumo de ração" subtitle="Kg por lançamento">
           <BarChart data={dashboard.feedSeries} color="bg-farm-straw" unit="kg" />
         </ChartPanel>
       </section>
@@ -1008,15 +1008,15 @@ function DashboardPage({
           <ComparisonChart data={dashboard.performanceSeries} />
         </ChartPanel>
         <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold">Alertas zootÃ©cnicos</h2>
-          <p className="mt-1 text-sm text-stone-500">Gerados automaticamente pelo Ãºltimo lanÃ§amento.</p>
+          <h2 className="text-lg font-semibold">Alertas zootécnicos</h2>
+          <p className="mt-1 text-sm text-stone-500">Gerados automaticamente pelo último lançamento.</p>
           <div className="mt-4 space-y-3">
             {dashboard.alerts.length ? (
               dashboard.alerts.map((alert) => <AlertCard key={alert.title} alert={alert} />)
             ) : (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">
-                <p className="font-semibold">Sem alertas crÃ­ticos</p>
-                <p className="mt-1 text-sm">ProduÃ§Ã£o, mortalidade, raÃ§Ã£o e temperatura dentro dos limites.</p>
+                <p className="font-semibold">Sem alertas críticos</p>
+                <p className="mt-1 text-sm">Produção, mortalidade, ração e temperatura dentro dos limites.</p>
               </div>
             )}
           </div>
@@ -1024,22 +1024,22 @@ function DashboardPage({
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1fr_1.2fr]">
-        <ChartPanel title="Mortalidade" subtitle="Aves por lanÃ§amento">
+        <ChartPanel title="Mortalidade" subtitle="Aves por lançamento">
           <BarChart data={dashboard.mortalitySeries} color="bg-farm-clay" unit="aves" />
         </ChartPanel>
         <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold">Ãšltimo lanÃ§amento</h2>
+          <h2 className="text-lg font-semibold">Último lançamento</h2>
           {latestRecord ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <InfoRow label="Data" value={latestRecord.data} />
               <InfoRow label="Lote" value={latestRecord.lote} />
               <InfoRow label="Ovos" value={formatNumber(latestRecord.ovosProduzidos)} />
               <InfoRow label="Postura" value={formatPercent((latestRecord.ovosProduzidos / flockSize) * 100)} />
-              <InfoRow label="RaÃ§Ã£o" value={`${formatNumber(latestRecord.racaoKg, 1)} kg`} />
-              <InfoRow label="Temperatura" value={`${formatNumber(latestRecord.temperatura, 1)} Â°C`} />
+              <InfoRow label="Ração" value={`${formatNumber(latestRecord.racaoKg, 1)} kg`} />
+              <InfoRow label="Temperatura" value={`${formatNumber(latestRecord.temperatura, 1)} °C`} />
             </div>
           ) : (
-            <p className="mt-3 text-sm text-stone-500">Nenhum registro lanÃ§ado ainda.</p>
+            <p className="mt-3 text-sm text-stone-500">Nenhum registro lançado ainda.</p>
           )}
         </section>
       </section>
@@ -1076,7 +1076,7 @@ function FlockSizeCard({ flockSize, onSave }: { flockSize: number; onSave: (valu
         <div>
           <h2 className="text-lg font-semibold">Plantel ativo</h2>
           <p className="mt-1 text-sm text-stone-500">
-            Usado nos cÃ¡lculos de postura, mortalidade percentual e comparaÃ§Ã£o com a curva esperada.
+            Usado nos cálculos de postura, mortalidade percentual e comparação com a curva esperada.
           </p>
         </div>
         <Field label="Quantidade de aves" error={error}>
@@ -1129,7 +1129,7 @@ function CsvPage() {
             </p>
             <h2 className="mt-1 text-xl font-semibold">Arquivo CSV</h2>
             <p className="mt-1 text-sm text-stone-500">
-              Acesse, confira e baixe o CSV gerado com todos os registros diÃ¡rios.
+              Acesse, confira e baixe o CSV gerado com todos os registros diários.
             </p>
           </div>
           <button
@@ -1150,7 +1150,7 @@ function CsvPage() {
       </section>
 
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-        <h2 className="text-lg font-semibold">PrÃ©via do CSV</h2>
+        <h2 className="text-lg font-semibold">Prévia do CSV</h2>
         <textarea
           readOnly
           value={csvContent}
@@ -1171,8 +1171,8 @@ function CsvPage() {
                 <th className="px-4 py-3">Ovos</th>
                 <th className="px-4 py-3">Quebrados</th>
                 <th className="px-4 py-3">Mortalidade</th>
-                <th className="px-4 py-3">RaÃ§Ã£o kg</th>
-                <th className="px-4 py-3">Ãgua</th>
+                <th className="px-4 py-3">Ração kg</th>
+                <th className="px-4 py-3">Água</th>
                 <th className="px-4 py-3">Temp.</th>
               </tr>
             </thead>
@@ -1186,7 +1186,7 @@ function CsvPage() {
                   <td className="px-4 py-3">{formatNumber(record.mortalidade)}</td>
                   <td className="px-4 py-3">{formatNumber(record.racaoKg, 1)}</td>
                   <td className="px-4 py-3">{formatNumber(record.agua, 1)}</td>
-                  <td className="px-4 py-3">{formatNumber(record.temperatura, 1)} Â°C</td>
+                  <td className="px-4 py-3">{formatNumber(record.temperatura, 1)} °C</td>
                 </tr>
               ))}
             </tbody>
@@ -1357,7 +1357,7 @@ function MobileSidebar({
             </span>
             <div>
               <p className="text-lg font-semibold">GranjaApp</p>
-              <p className="text-xs text-white/60">SÃ­tio do Bem</p>
+              <p className="text-xs text-white/60">Sítio do Bem</p>
             </div>
           </div>
           <button
@@ -1380,7 +1380,7 @@ function MobileSidebar({
           <MobileNavButton
             active={activePage === "daily-record"}
             icon={NotebookPen}
-            label="Registro diÃ¡rio"
+            label="Registro diário"
             onClick={() => onNavigate("daily-record")}
           />
           <MobileNavButton
@@ -1399,7 +1399,7 @@ function MobileSidebar({
 
         <div className="border-t border-white/10 p-4">
           <div className="mb-3 rounded-lg bg-white/8 p-3">
-            <p className="text-xs text-white/55">UsuÃ¡rio</p>
+            <p className="text-xs text-white/55">Usuário</p>
             <p className="truncate text-sm font-semibold">{userEmail ?? "Conta conectada"}</p>
           </div>
           <button
@@ -1463,7 +1463,7 @@ function DailyRecordPage({
       <section className="mb-5 grid gap-3 sm:grid-cols-3">
         <SummaryTile icon={Egg} label="Postura estimada" value={postura} />
         <SummaryTile icon={Feather} label="Plantel ativo" value={formatNumber(flockSize)} />
-        <SummaryTile icon={CalendarDays} label="LanÃ§amento" value="Hoje" />
+        <SummaryTile icon={CalendarDays} label="Lançamento" value="Hoje" />
       </section>
 
       <form onSubmit={onSubmit} className="rounded-lg border border-stone-200 bg-white p-4 shadow-panel sm:p-6">
@@ -1495,16 +1495,16 @@ function DailyRecordPage({
           <NumberField label="Ovos quebrados" icon={AlertCircle} value={form.ovosQuebrados} error={errors.ovosQuebrados} placeholder="Ex: 42" onChange={(value) => onChange("ovosQuebrados", value)} />
           <NumberField label="Mortalidade" icon={Feather} value={form.mortalidade} error={errors.mortalidade} placeholder="Ex: 3" onChange={(value) => onChange("mortalidade", value)} />
           <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(value) => onChange("descarte", value)} />
-          <NumberField label="Consumo de raÃ§Ã£o (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 470" onChange={(value) => onChange("racaoKg", value)} />
-          <NumberField label="Consumo de Ã¡gua" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 920" onChange={(value) => onChange("agua", value)} />
+          <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 470" onChange={(value) => onChange("racaoKg", value)} />
+          <NumberField label="Consumo de água" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 920" onChange={(value) => onChange("agua", value)} />
           <NumberField label="Temperatura" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 24,8" onChange={(value) => onChange("temperatura", value)} />
 
-          <Field label="ObservaÃ§Ãµes" error={errors.observacoes} className="sm:col-span-2">
+          <Field label="Observações" error={errors.observacoes} className="sm:col-span-2">
             <textarea
               value={form.observacoes}
               onChange={(event) => onChange("observacoes", event.target.value)}
               rows={4}
-              placeholder="Anote manejo, manutenÃ§Ã£o, qualidade dos ovos ou qualquer ocorrÃªncia."
+              placeholder="Anote manejo, manutenção, qualidade dos ovos ou qualquer ocorrência."
               className="field-input resize-none"
             />
           </Field>
@@ -1574,7 +1574,7 @@ function LineChart({ data }: { data: SeriesPoint[] }) {
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="mt-5 h-64 w-full" role="img" aria-label="Grafico de producao de ovos">
+    <svg viewBox={`0 0 ${width} ${height}`} className="mt-5 h-64 w-full" role="img" aria-label="Gráfico de produção de ovos">
       {[0, 1, 2, 3].map((line) => (
         <line key={line} x1={padding} x2={width - padding} y1={padding + line * 48} y2={padding + line * 48} stroke="#e7e5df" strokeWidth="1" />
       ))}
@@ -1777,5 +1777,6 @@ function NumberField({
 }
 
 export default App;
+
 
 
