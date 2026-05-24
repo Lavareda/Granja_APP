@@ -305,7 +305,24 @@ function saveToStorage<T>(key: string, value: T) {
 }
 
 function isDailyRecordList(value: unknown): value is DailyRecord[] {
-  return Array.isArray(value);
+  return Array.isArray(value) && value.every((record) => {
+    if (!record || typeof record !== "object") return false;
+
+    const candidate = record as Partial<DailyRecord>;
+    return (
+      typeof candidate.id === "number" &&
+      typeof candidate.data === "string" &&
+      typeof candidate.lote === "string" &&
+      typeof candidate.ovosProduzidos === "number" &&
+      typeof candidate.ovosQuebrados === "number" &&
+      typeof candidate.mortalidade === "number" &&
+      typeof candidate.descarte === "number" &&
+      typeof candidate.racaoKg === "number" &&
+      typeof candidate.agua === "number" &&
+      typeof candidate.temperatura === "number" &&
+      typeof candidate.observacoes === "string"
+    );
+  });
 }
 
 function isPage(value: unknown): value is Page {
@@ -1275,11 +1292,11 @@ function DailyRecordPage({
   onChange: (field: keyof DailyRecordForm, value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const { flockSize } = useFarmData();
+  const { flockSize, records } = useFarmData();
   const postura = useMemo(() => {
     const ovos = parseNumber(form.ovosProduzidos);
     return ovos ? formatPercent((ovos / flockSize) * 100) : "0,0%";
-  }, [form.ovosProduzidos]);
+  }, [form.ovosProduzidos, flockSize]);
 
   return (
     <>
