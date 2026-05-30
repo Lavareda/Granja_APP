@@ -50,6 +50,19 @@ export type FinancialRecord = {
   outrosCustos: number;
 };
 
+export type EggSale = {
+  id: number;
+  dataVenda: string;
+  cliente: string;
+  quantidadeDuzias: number;
+  quantidadeCaixas: number;
+  precoPorDuzia: number;
+  precoPorCaixa: number;
+  valorTotal: number;
+  formaPagamento: "pix" | "dinheiro" | "cartao" | "boleto" | "transferencia";
+  status: "pago" | "pendente";
+};
+
 export type InventoryItem = {
   id: number;
   nome: string;

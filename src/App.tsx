@@ -5,6 +5,7 @@ import {
   AlertCircle,
   BadgeDollarSign,
   BarChart3,
+  Bell,
   Boxes,
   CheckCircle2,
   ClipboardList,
@@ -24,6 +25,7 @@ import {
   Package,
   Save,
   Settings,
+  Sparkles,
   ThermometerSun,
   Tractor,
   TrendingUp,
@@ -33,6 +35,7 @@ import {
 import {
   defaultFlockSize,
   demoDailyRecords,
+  demoEggSales,
   demoFarmAreas,
   demoFinancialRecords,
   demoFlocks,
@@ -44,6 +47,7 @@ import type {
   Alert,
   AlertStatus,
   DailyRecord,
+  EggSale,
   FarmArea,
   FinancialRecord,
   Flock,
@@ -64,6 +68,22 @@ import {
   producaoEsperadaPorIdade,
 } from "./utils/farm";
 
+type Notification = {
+  id: string;
+  title: string;
+  message: string;
+  status: AlertStatus;
+  time: string;
+  read: boolean;
+};
+
+const demoNotifications: Notification[] = [
+  { id: "n1", title: "Mortalidade acima da meta", message: "Lote A-2025: 6 aves — acima do limite diário", status: "atencao", time: "há 2h", read: false },
+  { id: "n2", title: "Estoque de ração baixo", message: "2.850 kg disponíveis — mínimo: 3.200 kg", status: "critico", time: "há 4h", read: false },
+  { id: "n3", title: "Produção abaixo do esperado", message: "Postura: 89,1% — meta: 92,0%", status: "atencao", time: "há 6h", read: false },
+  { id: "n4", title: "Temperatura elevada — Galpão 2", message: "29,1 °C registrada — reforçar ventilação", status: "atencao", time: "há 8h", read: true },
+];
+
 type DailyRecordForm = {
   data: string;
   lote: string;
@@ -75,6 +95,17 @@ type DailyRecordForm = {
   agua: string;
   temperatura: string;
   observacoes: string;
+};
+
+type EggSaleForm = {
+  dataVenda: string;
+  cliente: string;
+  quantidadeDuzias: string;
+  quantidadeCaixas: string;
+  precoPorDuzia: string;
+  precoPorCaixa: string;
+  formaPagamento: EggSale["formaPagamento"];
+  status: EggSale["status"];
 };
 
 type AccessRole = "manager" | "granjeiro";
@@ -104,6 +135,7 @@ type FarmDataContextValue = {
   records: DailyRecord[];
   flocks: Flock[];
   financialRecords: FinancialRecord[];
+  sales: EggSale[];
   inventory: InventoryItem[];
   farmAreas: FarmArea[];
   latestRecord?: DailyRecord;
@@ -111,6 +143,7 @@ type FarmDataContextValue = {
   latestFinance: FinancialRecord;
   dashboard: DashboardData;
   addDailyRecord: (record: Omit<DailyRecord, "id">) => void;
+  addEggSale: (sale: Omit<EggSale, "id">) => void;
   addFlock: () => void;
   updateFlock: (id: number, field: keyof Flock, value: string) => void;
   updateFinancialRecord: (field: keyof FinancialRecord, value: number | string) => void;
@@ -131,10 +164,12 @@ const storageKeys = {
   records: "granjaapp.dailyRecords.v2",
   flocks: "granjaapp.flocks.v1",
   finance: "granjaapp.finance.v1",
+  sales: "granjaapp.eggSales.v1",
   inventory: "granjaapp.inventory.v1",
   page: "granjaapp.currentPage.v2",
   form: "granjaapp.dailyRecordDraft.v2",
   role: "granjaapp.accessRole.v1",
+  onboarding: "granjaapp.onboardingDone.v1",
 };
 
 const initialForm: DailyRecordForm = {
@@ -148,6 +183,17 @@ const initialForm: DailyRecordForm = {
   agua: "",
   temperatura: "",
   observacoes: "",
+};
+
+const initialSaleForm: EggSaleForm = {
+  dataVenda: today,
+  cliente: "",
+  quantidadeDuzias: "",
+  quantidadeCaixas: "",
+  precoPorDuzia: "10.90",
+  precoPorCaixa: "327.00",
+  formaPagamento: "pix",
+  status: "pago",
 };
 
 const numericFields: Array<keyof DailyRecordForm> = [
@@ -266,6 +312,10 @@ function isFinancialList(value: unknown): value is FinancialRecord[] {
   return Array.isArray(value) && value.every((item) => typeof item?.id === "number" && typeof item?.receitaDiaria === "number");
 }
 
+function isEggSaleList(value: unknown): value is EggSale[] {
+  return Array.isArray(value) && value.every((item) => typeof item?.id === "number" && typeof item?.cliente === "string");
+}
+
 function isInventoryList(value: unknown): value is InventoryItem[] {
   return Array.isArray(value) && value.every((item) => typeof item?.id === "number" && typeof item?.nome === "string");
 }
@@ -375,18 +425,24 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
     loadFromStorage(storageKeys.finance, demoFinancialRecords, isFinancialList),
   );
+  const [sales, setSales] = useState<EggSale[]>(() => loadFromStorage(storageKeys.sales, demoEggSales, isEggSaleList));
   const [inventory, setInventory] = useState<InventoryItem[]>(() => loadFromStorage(storageKeys.inventory, demoInventory, isInventoryList));
   const farmAreas = demoFarmAreas;
 
   useEffect(() => saveToStorage(storageKeys.records, records), [records]);
   useEffect(() => saveToStorage(storageKeys.flocks, flocks), [flocks]);
   useEffect(() => saveToStorage(storageKeys.finance, financialRecords), [financialRecords]);
+  useEffect(() => saveToStorage(storageKeys.sales, sales), [sales]);
   useEffect(() => saveToStorage(storageKeys.inventory, inventory), [inventory]);
 
   const sortedRecords = useMemo(() => [...records].sort((a, b) => a.data.localeCompare(b.data)), [records]);
   const latestRecord = sortedRecords[sortedRecords.length - 1];
   const mainFlock = flocks.find((flock) => flock.status !== "encerrado") ?? flocks[0];
   const latestFinance = financialRecords[financialRecords.length - 1] ?? demoFinancialRecords[0];
+  const receitaHoje = sales.filter((sale) => sale.dataVenda === today).reduce((sum, sale) => sum + sale.valorTotal, 0);
+  const receitaMes = sales
+    .filter((sale) => sale.dataVenda.slice(0, 7) === today.slice(0, 7))
+    .reduce((sum, sale) => sum + sale.valorTotal, 0);
 
   const dashboard = useMemo<DashboardData>(() => {
     const recent = sortedRecords.slice(-7);
@@ -401,7 +457,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       posturaHoje: latestRecord ? calcularPostura(latestRecord.ovosProduzidos, activeBirds) : 0,
       mortalidadeHoje: latestRecord?.mortalidade ?? 0,
       racaoHoje: latestRecord?.racaoKg ?? 0,
-      receitaHoje: latestFinance.receitaDiaria,
+      receitaHoje: receitaHoje || latestFinance.receitaDiaria,
       lucroHoje: calcularLucroDiario(latestFinance),
       alertasAtivos: alertas.filter((alerta) => alerta.status !== "normal").length,
       estoqueCritico: inventory.filter((item) => item.status === "critico").length,
@@ -420,10 +476,27 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       })),
       alertas,
     };
-  }, [records, sortedRecords, latestRecord, mainFlock, latestFinance, inventory]);
+  }, [records, sortedRecords, latestRecord, mainFlock, latestFinance, inventory, receitaHoje]);
 
   function addDailyRecord(record: Omit<DailyRecord, "id">) {
     setRecords((current) => [...current, { ...record, id: Date.now() }]);
+  }
+
+  function addEggSale(sale: Omit<EggSale, "id">) {
+    setSales((current) => [{ ...sale, id: Date.now() }, ...current]);
+    setFinancialRecords((current) => {
+      const latest = current[current.length - 1] ?? demoFinancialRecords[0];
+      return [
+        ...current.slice(0, -1),
+        {
+          ...latest,
+          receitaDiaria: receitaHoje + sale.valorTotal,
+          receitaMensal: receitaMes + sale.valorTotal,
+          precoPorDuzia: sale.precoPorDuzia,
+          precoPorCaixa: sale.precoPorCaixa,
+        },
+      ];
+    });
   }
 
   function addFlock() {
@@ -483,6 +556,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       records,
       flocks,
       financialRecords,
+      sales,
       inventory,
       farmAreas,
       latestRecord,
@@ -490,12 +564,13 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       latestFinance,
       dashboard,
       addDailyRecord,
+      addEggSale,
       addFlock,
       updateFlock,
       updateFinancialRecord,
       updateInventoryItem,
     }),
-    [records, flocks, financialRecords, inventory, latestRecord, mainFlock, latestFinance, dashboard],
+    [records, flocks, financialRecords, sales, inventory, latestRecord, mainFlock, latestFinance, dashboard],
   );
 
   return <FarmDataContext.Provider value={value}>{children}</FarmDataContext.Provider>;
@@ -513,9 +588,13 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f2] px-4 text-farm-ink">
-        <div className="rounded-lg border border-stone-200 bg-white p-6 shadow-panel">
-          <p className="font-semibold">Carregando sessão...</p>
+      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f2] px-4">
+        <div className="animate-fade-in text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-farm-lime">
+            <Tractor className="h-8 w-8 animate-pulse text-farm-green" aria-hidden="true" />
+          </div>
+          <p className="text-lg font-bold text-farm-ink">GranjaApp</p>
+          <p className="mt-1 text-sm text-stone-400">Carregando dados...</p>
         </div>
       </div>
     );
@@ -634,6 +713,134 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
   );
 }
 
+function OnboardingModal({ onClose }: { onClose: () => void }) {
+  const features = [
+    { icon: Home, title: "Painel operacional", desc: "KPIs, alertas automáticos e gráficos em tempo real." },
+    { icon: NotebookPen, title: "Registros diários", desc: "Lance produção, ração, água e temperatura por dia." },
+    { icon: BadgeDollarSign, title: "Controle financeiro", desc: "Vendas, receitas, custos e margem de lucro." },
+    { icon: Package, title: "Estoque", desc: "Ração, medicamentos, bandejas e alertas de reposição." },
+    { icon: BarChart3, title: "Indicadores zootécnicos", desc: "Postura, conversão alimentar e mortalidade." },
+    { icon: FileText, title: "Relatórios", desc: "Resumos diários, semanais, mensais e exportação CSV." },
+    { icon: Map, title: "Mapa da granja", desc: "Layout interativo com dados de cada área produtiva." },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-farm-ink/60 px-4 py-8 backdrop-blur-sm">
+      <div className="w-full max-w-2xl animate-fade-in overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="bg-gradient-to-br from-farm-green to-farm-leaf px-8 py-10 text-white">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20">
+            <Tractor className="h-7 w-7" aria-hidden="true" />
+          </div>
+          <h2 className="text-3xl font-bold">Bem-vindo ao GranjaApp</h2>
+          <p className="mt-2 text-lg text-white/80">Plataforma inteligente para gestão avícola</p>
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-sm font-medium">
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            Dados simulados para apresentação comercial
+          </div>
+        </div>
+        <div className="px-8 py-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-stone-400">O que você vai explorar</p>
+          <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+            {features.map(({ icon: Icon, title, desc }) => (
+              <div key={title} className="flex items-start gap-3 rounded-xl border border-stone-100 p-3 transition hover:border-farm-lime hover:bg-farm-lime/20">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-farm-lime text-farm-green">
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold leading-tight">{title}</p>
+                  <p className="mt-0.5 text-xs leading-snug text-stone-500">{desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={onClose}
+            className="mt-6 flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-farm-green text-base font-bold text-white shadow-lg shadow-green-900/20 transition hover:bg-farm-ink"
+          >
+            <Sparkles className="h-5 w-5" aria-hidden="true" />
+            Entrar na demonstração
+          </button>
+          <p className="mt-3 text-center text-xs text-stone-400">GranjaApp · Versão demonstrativa · Dados simulados</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NotificationCenter() {
+  const [open, setOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>(demoNotifications);
+  const unread = notifications.filter((n) => !n.read).length;
+
+  function markAllRead() {
+    setNotifications((current) => current.map((n) => ({ ...n, read: true })));
+  }
+
+  const dotColor: Record<AlertStatus, string> = {
+    critico: "bg-red-500",
+    atencao: "bg-amber-400",
+    normal: "bg-emerald-500",
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="relative flex h-11 w-11 items-center justify-center rounded-lg border border-stone-200 bg-white shadow-sm transition hover:border-farm-green hover:text-farm-green"
+        aria-label="Notificações"
+      >
+        <Bell className="h-5 w-5" aria-hidden="true" />
+        {unread > 0 && (
+          <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+            {unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <button type="button" className="fixed inset-0 z-30" onClick={() => setOpen(false)} aria-label="Fechar notificações" />
+          <div className="absolute right-0 top-14 z-40 w-80 animate-slide-down overflow-hidden rounded-xl border border-stone-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3">
+              <h3 className="font-bold text-farm-ink">Notificações</h3>
+              {unread > 0 && (
+                <button type="button" onClick={markAllRead} className="text-xs font-semibold text-farm-green transition hover:text-farm-ink">
+                  Marcar todas como lidas
+                </button>
+              )}
+            </div>
+            <div className="max-h-80 divide-y divide-stone-50 overflow-y-auto">
+              {notifications.map((n) => (
+                <div key={n.id} className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-stone-50 ${n.read ? "opacity-55" : ""}`}>
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor[n.status]}`} />
+                  <div className="min-w-0">
+                    <p className="font-semibold leading-snug">{n.title}</p>
+                    <p className="mt-0.5 text-xs leading-snug text-stone-500">{n.message}</p>
+                    <p className="mt-1 text-xs text-stone-400">{n.time}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-stone-100 px-4 py-2.5 text-center text-xs text-stone-400">
+              Alertas automáticos · dados demonstrativos
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AppFooter() {
+  return (
+    <footer className="mt-auto border-t border-stone-200 bg-white/60 px-4 py-6 text-center backdrop-blur">
+      <p className="text-sm font-semibold text-farm-green">GranjaApp — Plataforma inteligente para gestão avícola</p>
+      <p className="mt-1 text-xs text-stone-400">Versão demonstrativa · Dados simulados para apresentação comercial</p>
+    </footer>
+  );
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -664,6 +871,7 @@ function AppShell() {
   const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(() => !loadFromStorage(storageKeys.onboarding, false));
   const { addDailyRecord } = useFarmData();
   const { signOut, user } = useAuth();
   const navigate = useNavigate();
@@ -755,10 +963,16 @@ function AppShell() {
     }
   }
 
+  function dismissOnboarding() {
+    saveToStorage(storageKeys.onboarding, true);
+    setShowOnboarding(false);
+  }
+
   const pageTitle = navItems.find((item) => item.page === page)?.label ?? "Painel";
 
   return (
-    <div className="min-h-screen bg-[#f6f7f2] text-farm-ink">
+    <div className="flex min-h-screen flex-col bg-[#f6f7f2] text-farm-ink">
+      {showOnboarding && <OnboardingModal onClose={dismissOnboarding} />}
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-[#f6f7f2]/95 px-4 py-4 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
@@ -770,16 +984,18 @@ function AppShell() {
               <Menu className="h-5 w-5" aria-hidden="true" />
             </button>
             <div className="min-w-0">
-              <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-farm-green">
-                <Tractor className="h-4 w-4" aria-hidden="true" />
+              <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-farm-green">
+                <Tractor className="h-4 w-4 shrink-0" aria-hidden="true" />
                 GranjaApp · Sítio do Bem
-                <span className="rounded bg-farm-lime px-2 py-0.5 text-xs font-semibold text-farm-green">Modo demonstração</span>
+                <span className="rounded-full bg-farm-green px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">Modo demonstração</span>
               </p>
-              <h1 className="truncate text-2xl font-semibold text-farm-ink">{pageTitle}</h1>
+              <h1 className="truncate text-2xl font-bold text-farm-ink">{pageTitle}</h1>
+              <p className="mt-0.5 hidden text-xs text-stone-400 sm:block">Dados simulados para apresentação comercial</p>
             </div>
           </div>
           <div className="hidden items-center gap-2 md:flex">
             <RoleSwitch role={role} onChange={changeRole} />
+            <NotificationCenter />
             <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email ?? "Usuário demo"}</span>
             <button onClick={handleLogout} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:text-farm-green">
               Sair
@@ -816,15 +1032,18 @@ function AppShell() {
           </div>
         ) : null}
 
-        {page === "dashboard" ? <DashboardPage onNewRecord={() => goToPage("records")} /> : null}
-        {page === "records" ? <DailyRecordPage form={form} errors={errors} onChange={updateField} onSubmit={handleSubmit} /> : null}
-        {page === "flocks" ? <FlocksPage /> : null}
-        {page === "finance" ? <FinancePage /> : null}
-        {page === "inventory" ? <InventoryPage /> : null}
-        {page === "reports" ? <ReportsPage /> : null}
-        {page === "map" ? <FarmMapPage /> : null}
-        {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} /> : null}
+        <div key={page} className="animate-fade-in">
+          {page === "dashboard" ? <DashboardPage onNewRecord={() => goToPage("records")} /> : null}
+          {page === "records" ? <DailyRecordPage form={form} errors={errors} onChange={updateField} onSubmit={handleSubmit} /> : null}
+          {page === "flocks" ? <FlocksPage /> : null}
+          {page === "finance" ? <FinancePage /> : null}
+          {page === "inventory" ? <InventoryPage /> : null}
+          {page === "reports" ? <ReportsPage /> : null}
+          {page === "map" ? <FarmMapPage /> : null}
+          {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} /> : null}
+        </div>
       </main>
+      <AppFooter />
     </div>
   );
 }
@@ -837,8 +1056,8 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold">Resumo operacional</h2>
-          <p className="mt-1 text-sm text-stone-500">{records.length} registros locais de uma granja com 4.000 poedeiras em demonstração.</p>
+          <h2 className="text-xl font-bold text-farm-ink">Resumo operacional</h2>
+          <p className="mt-1 text-sm text-stone-400">{records.length} registros · granja com 4.000 poedeiras · dados de demonstração</p>
         </div>
         <button onClick={onNewRecord} className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink">
           <NotebookPen className="h-5 w-5" aria-hidden="true" />
@@ -872,9 +1091,9 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
           <ComparisonChart data={dashboard.performanceSeries} />
         </ChartPanel>
 
-        <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold">Alertas automáticos</h2>
-          <p className="mt-1 text-sm text-stone-500">Cores: verde normal, amarelo atenção e vermelho crítico.</p>
+        <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-farm-ink">Alertas automáticos</h2>
+          <p className="mt-0.5 text-xs text-stone-400">Verde: normal · Amarelo: atenção · Vermelho: crítico</p>
           <div className="mt-4 space-y-3">
             {dashboard.alertas.map((alerta) => (
               <AlertCard key={alerta.id} alert={alerta} />
@@ -896,8 +1115,8 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
         <ChartPanel title="Mortalidade" subtitle="Aves por lançamento">
           <BarChart data={dashboard.mortalitySeries} color="bg-farm-clay" unit="aves" />
         </ChartPanel>
-        <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold">Último lançamento</h2>
+        <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-farm-ink">Último lançamento</h2>
           {latestRecord ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <InfoRow label="Data" value={latestRecord.data} />
@@ -1060,36 +1279,164 @@ function FlocksPage() {
 }
 
 function FinancePage() {
-  const { latestFinance, latestRecord, mainFlock, updateFinancialRecord } = useFarmData();
-  const lucroDiario = calcularLucroDiario(latestFinance);
-  const lucroMensal = latestFinance.receitaMensal - (latestFinance.custoRacao + latestFinance.custoMaoDeObra + latestFinance.energia + latestFinance.medicamentos + latestFinance.outrosCustos) * 30;
-  const ovos = latestRecord?.ovosProduzidos ?? 1;
-  const aves = mainFlock?.quantidadeAtual ?? defaultFlockSize;
-  const custoTotalDia = latestFinance.receitaDiaria - lucroDiario;
+  const { latestFinance, sales, addEggSale, updateFinancialRecord } = useFarmData();
+  const [saleForm, setSaleForm] = useState<EggSaleForm>(initialSaleForm);
+  const receitaDia = sales.filter((sale) => sale.dataVenda === today).reduce((sum, sale) => sum + sale.valorTotal, 0);
+  const receitaMes = sales.filter((sale) => sale.dataVenda.slice(0, 7) === today.slice(0, 7)).reduce((sum, sale) => sum + sale.valorTotal, 0);
+  const contasPendentes = sales.filter((sale) => sale.status === "pendente").reduce((sum, sale) => sum + sale.valorTotal, 0);
+  const custoTotalDia = latestFinance.custoRacao + latestFinance.custoMaoDeObra + latestFinance.energia + latestFinance.medicamentos + latestFinance.outrosCustos;
+  const lucroEstimado = receitaDia - custoTotalDia;
+  const duziasVendidasDia = sales
+    .filter((sale) => sale.dataVenda === today)
+    .reduce((sum, sale) => sum + sale.quantidadeDuzias + sale.quantidadeCaixas * 30, 0);
+  const custoPorDuzia = duziasVendidasDia ? custoTotalDia / duziasVendidasDia : 0;
+  const margemLucro = receitaDia ? (lucroEstimado / receitaDia) * 100 : 0;
+  const valorTotalVenda =
+    parseNumber(saleForm.quantidadeDuzias || "0") * parseNumber(saleForm.precoPorDuzia || "0") +
+    parseNumber(saleForm.quantidadeCaixas || "0") * parseNumber(saleForm.precoPorCaixa || "0");
 
   const financeCards = [
-    ["Receita diária", formatCurrency(latestFinance.receitaDiaria)],
-    ["Receita mensal", formatCurrency(latestFinance.receitaMensal)],
-    ["Preço por dúzia", formatCurrency(latestFinance.precoPorDuzia)],
-    ["Preço por caixa", formatCurrency(latestFinance.precoPorCaixa)],
-    ["Custo de ração", formatCurrency(latestFinance.custoRacao)],
-    ["Custo de mão de obra", formatCurrency(latestFinance.custoMaoDeObra)],
-    ["Energia", formatCurrency(latestFinance.energia)],
-    ["Medicamentos", formatCurrency(latestFinance.medicamentos)],
-    ["Outros custos", formatCurrency(latestFinance.outrosCustos)],
-    ["Lucro diário estimado", formatCurrency(lucroDiario)],
-    ["Lucro mensal estimado", formatCurrency(lucroMensal)],
-    ["Custo por ovo", formatCurrency(custoTotalDia / ovos)],
-    ["Custo por dúzia", formatCurrency((custoTotalDia / ovos) * 12)],
-    ["Custo por ave", formatCurrency(custoTotalDia / aves)],
+    ["Receita do dia", formatCurrency(receitaDia)],
+    ["Receita do mês", formatCurrency(receitaMes)],
+    ["Contas pendentes", formatCurrency(contasPendentes)],
+    ["Lucro estimado", formatCurrency(lucroEstimado)],
+    ["Custo por dúzia", formatCurrency(custoPorDuzia)],
+    ["Margem de lucro", formatPercent(margemLucro)],
   ];
+
+  function updateSaleForm(field: keyof EggSaleForm, value: string) {
+    setSaleForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function handleSaleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const quantidadeDuzias = parseNumber(saleForm.quantidadeDuzias || "0");
+    const quantidadeCaixas = parseNumber(saleForm.quantidadeCaixas || "0");
+    const precoPorDuzia = parseNumber(saleForm.precoPorDuzia || "0");
+    const precoPorCaixa = parseNumber(saleForm.precoPorCaixa || "0");
+    const valorTotal = quantidadeDuzias * precoPorDuzia + quantidadeCaixas * precoPorCaixa;
+
+    if (!saleForm.dataVenda || !saleForm.cliente.trim() || valorTotal <= 0) return;
+
+    addEggSale({
+      dataVenda: saleForm.dataVenda,
+      cliente: saleForm.cliente.trim(),
+      quantidadeDuzias,
+      quantidadeCaixas,
+      precoPorDuzia,
+      precoPorCaixa,
+      valorTotal,
+      formaPagamento: saleForm.formaPagamento,
+      status: saleForm.status,
+    });
+    setSaleForm({ ...initialSaleForm, precoPorDuzia: saleForm.precoPorDuzia, precoPorCaixa: saleForm.precoPorCaixa });
+  }
 
   return (
     <div className="space-y-5">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {financeCards.map(([label, value]) => (
-          <StatCard key={label} icon={BadgeDollarSign} label={label} value={value} detail="Dado demonstrativo salvo localmente" />
+          <StatCard key={label} icon={BadgeDollarSign} label={label} value={value} detail="Calculado a partir das vendas locais" />
         ))}
+      </section>
+
+      <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
+        <div className="flex items-start gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-farm-lime text-farm-green">
+            <Egg className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h2 className="text-lg font-semibold">Registrar venda</h2>
+            <p className="mt-1 text-sm text-stone-500">Informe dúzias, caixas, preços e status de pagamento. O valor total é automático.</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSaleSubmit} className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Field label="Data da venda">
+            <input type="date" className="field-input" value={saleForm.dataVenda} onChange={(event) => updateSaleForm("dataVenda", event.target.value)} />
+          </Field>
+          <Field label="Cliente">
+            <input className="field-input" value={saleForm.cliente} onChange={(event) => updateSaleForm("cliente", event.target.value)} placeholder="Ex: Mercado São José" />
+          </Field>
+          <Field label="Quantidade de dúzias">
+            <input type="number" min="0" step="1" className="field-input" value={saleForm.quantidadeDuzias} onChange={(event) => updateSaleForm("quantidadeDuzias", event.target.value)} />
+          </Field>
+          <Field label="Quantidade de caixas">
+            <input type="number" min="0" step="1" className="field-input" value={saleForm.quantidadeCaixas} onChange={(event) => updateSaleForm("quantidadeCaixas", event.target.value)} />
+          </Field>
+          <Field label="Preço por dúzia">
+            <input type="number" min="0" step="0.01" className="field-input" value={saleForm.precoPorDuzia} onChange={(event) => updateSaleForm("precoPorDuzia", event.target.value)} />
+          </Field>
+          <Field label="Preço por caixa">
+            <input type="number" min="0" step="0.01" className="field-input" value={saleForm.precoPorCaixa} onChange={(event) => updateSaleForm("precoPorCaixa", event.target.value)} />
+          </Field>
+          <Field label="Forma de pagamento">
+            <select className="field-input" value={saleForm.formaPagamento} onChange={(event) => updateSaleForm("formaPagamento", event.target.value)}>
+              <option value="pix">Pix</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="cartao">Cartão</option>
+              <option value="boleto">Boleto</option>
+              <option value="transferencia">Transferência</option>
+            </select>
+          </Field>
+          <Field label="Status">
+            <select className="field-input" value={saleForm.status} onChange={(event) => updateSaleForm("status", event.target.value)}>
+              <option value="pago">Pago</option>
+              <option value="pendente">Pendente</option>
+            </select>
+          </Field>
+          <div className="rounded-lg border border-stone-200 bg-stone-50 p-4 xl:col-span-2">
+            <p className="text-sm font-semibold text-stone-500">Valor total automático</p>
+            <p className="mt-2 text-2xl font-semibold text-farm-green">{formatCurrency(valorTotalVenda)}</p>
+          </div>
+          <button type="submit" className="flex h-16 items-center justify-center gap-2 rounded-lg bg-farm-green px-5 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink xl:col-span-2">
+            <Save className="h-5 w-5" aria-hidden="true" />
+            Registrar venda
+          </button>
+        </form>
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
+        <div className="border-b border-stone-200 p-5">
+          <h2 className="text-lg font-semibold">Vendas de ovos</h2>
+          <p className="mt-1 text-sm text-stone-500">Histórico salvo em localStorage com status financeiro.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-stone-50 text-xs uppercase text-stone-500">
+              <tr>
+                <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3">Cliente</th>
+                <th className="px-4 py-3">Dúzias</th>
+                <th className="px-4 py-3">Caixas</th>
+                <th className="px-4 py-3">Preço/dúzia</th>
+                <th className="px-4 py-3">Preço/caixa</th>
+                <th className="px-4 py-3">Total</th>
+                <th className="px-4 py-3">Pagamento</th>
+                <th className="px-4 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {sales.map((sale) => (
+                <tr key={sale.id}>
+                  <td className="px-4 py-3 font-medium">{sale.dataVenda}</td>
+                  <td className="px-4 py-3">{sale.cliente}</td>
+                  <td className="px-4 py-3">{formatNumber(sale.quantidadeDuzias)}</td>
+                  <td className="px-4 py-3">{formatNumber(sale.quantidadeCaixas)}</td>
+                  <td className="px-4 py-3">{formatCurrency(sale.precoPorDuzia)}</td>
+                  <td className="px-4 py-3">{formatCurrency(sale.precoPorCaixa)}</td>
+                  <td className="px-4 py-3 font-semibold">{formatCurrency(sale.valorTotal)}</td>
+                  <td className="px-4 py-3 capitalize">{sale.formaPagamento}</td>
+                  <td className="px-4 py-3">
+                    <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${sale.status === "pago" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                      {sale.status === "pago" ? "Pago" : "Pendente"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
@@ -1387,26 +1734,26 @@ function RoleSwitch({
 
 function StatCard({ icon: Icon, label, value, detail }: { icon: typeof Egg; label: string; value: string; detail: string }) {
   return (
-    <article className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
+    <article className="group rounded-xl border border-stone-200 bg-white p-5 shadow-sm transition-all duration-200 hover:border-farm-green/30 hover:shadow-md">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-stone-500">{label}</p>
-          <p className="mt-2 break-words text-2xl font-semibold">{value}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">{label}</p>
+          <p className="mt-2 break-words text-2xl font-bold text-farm-ink">{value}</p>
         </div>
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-farm-lime text-farm-green">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-farm-lime text-farm-green transition-colors duration-200 group-hover:bg-farm-green group-hover:text-white">
           <Icon className="h-5 w-5" aria-hidden="true" />
         </span>
       </div>
-      <p className="mt-4 text-sm text-stone-500">{detail}</p>
+      <p className="mt-4 text-xs text-stone-400">{detail}</p>
     </article>
   );
 }
 
 function ChartPanel({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="mt-1 text-sm text-stone-500">{subtitle}</p>
+    <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
+      <h2 className="text-lg font-bold text-farm-ink">{title}</h2>
+      <p className="mt-0.5 text-xs text-stone-400">{subtitle}</p>
       {children}
     </section>
   );
@@ -1425,14 +1772,24 @@ function LineChart({ data }: { data: SeriesPoint[] }) {
     const y = height - padding - ratio * (height - padding * 2);
     return { ...point, x, y };
   });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const linePath = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const areaPath = points.length > 0
+    ? `${linePath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`
+    : "";
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="mt-5 h-64 w-full" role="img" aria-label="Gráfico de produção de ovos">
+      <defs>
+        <linearGradient id="eggGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#2f6f4f" stopOpacity="0.18" />
+          <stop offset="100%" stopColor="#2f6f4f" stopOpacity="0" />
+        </linearGradient>
+      </defs>
       {[0, 1, 2, 3].map((line) => (
         <line key={line} x1={padding} x2={width - padding} y1={padding + line * 48} y2={padding + line * 48} stroke="#e7e5df" strokeWidth="1" />
       ))}
-      <path d={path} fill="none" stroke="#2f6f4f" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
+      <path d={areaPath} fill="url(#eggGradient)" />
+      <path d={linePath} fill="none" stroke="#2f6f4f" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
       {points.map((point) => (
         <g key={`${point.label}-${point.value}`}>
           <circle cx={point.x} cy={point.y} r="5" fill="#ffffff" stroke="#2f6f4f" strokeWidth="3" />
@@ -1513,9 +1870,9 @@ function AlertCard({ alert }: { alert: Alert }) {
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-stone-50 p-3">
-      <p className="text-xs font-semibold uppercase text-stone-500">{label}</p>
-      <p className="mt-1 break-words text-base font-semibold">{value}</p>
+    <div className="rounded-lg border border-stone-100 bg-stone-50 p-3 transition hover:border-stone-200 hover:bg-white">
+      <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400">{label}</p>
+      <p className="mt-1 break-words text-sm font-bold text-farm-ink">{value}</p>
     </div>
   );
 }
@@ -1535,8 +1892,15 @@ function ReportSummary({ title, ovos, racao, lucro }: { title: string; ovos: num
 
 function TabButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof Egg; label: string; onClick: () => void }) {
   return (
-    <button onClick={onClick} className={`flex h-11 items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition ${active ? "bg-farm-green text-white" : "border border-stone-200 bg-white text-stone-600 hover:border-farm-green hover:text-farm-green"}`}>
-      <Icon className="h-4 w-4" aria-hidden="true" />
+    <button
+      onClick={onClick}
+      className={`flex h-11 items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition-all duration-150 ${
+        active
+          ? "bg-farm-green text-white shadow-sm"
+          : "border border-stone-200 bg-white text-stone-500 hover:border-farm-green/50 hover:bg-farm-lime/40 hover:text-farm-green"
+      }`}
+    >
+      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </button>
   );
