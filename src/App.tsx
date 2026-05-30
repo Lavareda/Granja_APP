@@ -973,9 +973,9 @@ function AppShell() {
   return (
     <div className="flex min-h-screen flex-col bg-[#f6f7f2] text-farm-ink">
       {showOnboarding && <OnboardingModal onClose={dismissOnboarding} />}
-      <header className="sticky top-0 z-20 border-b border-stone-200 bg-[#f6f7f2]/95 px-4 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
+      <header className="sticky top-0 z-20 border-b border-stone-200 bg-[#f6f7f2]/95 px-4 py-3 backdrop-blur sm:py-4">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               onClick={() => setIsSidebarOpen(true)}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white shadow-sm md:hidden"
@@ -984,25 +984,27 @@ function AppShell() {
               <Menu className="h-5 w-5" aria-hidden="true" />
             </button>
             <div className="min-w-0">
-              <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-farm-green">
-                <Tractor className="h-4 w-4 shrink-0" aria-hidden="true" />
-                GranjaApp · Sítio do Bem
-                <span className="rounded-full bg-farm-green px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">Modo demonstração</span>
+              <p className="flex items-center gap-1.5 text-xs font-medium text-farm-green sm:text-sm">
+                <Tractor className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
+                <span className="truncate sm:hidden">GranjaApp</span>
+                <span className="hidden truncate sm:inline">GranjaApp · Sítio do Bem</span>
+                <span className="hidden shrink-0 rounded-full bg-farm-green px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo demonstração</span>
               </p>
-              <h1 className="truncate text-2xl font-bold text-farm-ink">{pageTitle}</h1>
-              <p className="mt-0.5 hidden text-xs text-stone-400 sm:block">Dados simulados para apresentação comercial</p>
+              <h1 className="truncate text-xl font-bold text-farm-ink sm:text-2xl">{pageTitle}</h1>
             </div>
           </div>
-          <div className="hidden items-center gap-2 md:flex">
-            <RoleSwitch role={role} onChange={changeRole} />
+          <div className="flex shrink-0 items-center gap-2">
             <NotificationCenter />
-            <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email ?? "Usuário demo"}</span>
-            <button onClick={handleLogout} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:text-farm-green">
-              Sair
-            </button>
+            <div className="hidden items-center gap-2 md:flex">
+              <RoleSwitch role={role} onChange={changeRole} />
+              <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email ?? "Usuário demo"}</span>
+              <button onClick={handleLogout} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:text-farm-green">
+                Sair
+              </button>
+            </div>
           </div>
         </div>
-        <nav className={`mx-auto mt-4 hidden max-w-7xl gap-2 md:grid ${role === "manager" ? "grid-cols-8" : "grid-cols-1"}`}>
+        <nav className={`mx-auto mt-3 hidden max-w-7xl gap-2 md:grid ${role === "manager" ? "grid-cols-8" : "grid-cols-1"}`}>
           {visibleNavItems.map((item) => (
             <TabButton key={item.page} active={page === item.page} icon={item.icon} label={item.label} onClick={() => goToPage(item.page)} />
           ))}
@@ -1021,7 +1023,7 @@ function AppShell() {
         onLogout={handleLogout}
       />
 
-      <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
         {showSuccess ? (
           <div className="mb-5 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">
             <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
@@ -1059,7 +1061,7 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
           <h2 className="text-xl font-bold text-farm-ink">Resumo operacional</h2>
           <p className="mt-1 text-sm text-stone-400">{records.length} registros · granja com 4.000 poedeiras · dados de demonstração</p>
         </div>
-        <button onClick={onNewRecord} className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink">
+        <button onClick={onNewRecord} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink sm:w-auto">
           <NotebookPen className="h-5 w-5" aria-hidden="true" />
           Novo registro
         </button>
@@ -1179,7 +1181,7 @@ function DailyRecordPage({
         <NumberField label="Consumo de água" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(value) => onChange("agua", value)} />
         <NumberField label="Temperatura" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(value) => onChange("temperatura", value)} />
         <Field label="Observações" error={errors.observacoes} className="sm:col-span-2">
-          <textarea value={form.observacoes} onChange={(event) => onChange("observacoes", event.target.value)} rows={4} className="field-input resize-none" />
+          <textarea value={form.observacoes} onChange={(event) => onChange("observacoes", event.target.value)} rows={4} className="field-input h-auto min-h-[108px] resize-none py-3" />
         </Field>
       </div>
 
@@ -1215,7 +1217,7 @@ function FlocksPage() {
         })}
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
+      <section className="rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="flex flex-col gap-4 border-b border-stone-200 p-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold">Tabela editável de lotes</h2>
@@ -1224,13 +1226,14 @@ function FlocksPage() {
           <button
             type="button"
             onClick={addFlock}
-            className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink"
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink sm:w-auto"
           >
             <Layers3 className="h-5 w-5" aria-hidden="true" />
             Novo lote
           </button>
         </div>
         <div className="overflow-x-auto">
+          <p className="px-5 pb-1 pt-3 text-xs text-stone-400 md:hidden">← Deslize para ver todas as colunas</p>
           <table className="w-full min-w-[1060px] text-left text-sm">
             <thead className="bg-stone-50 text-xs uppercase text-stone-500">
               <tr>
@@ -1385,23 +1388,24 @@ function FinancePage() {
               <option value="pendente">Pendente</option>
             </select>
           </Field>
-          <div className="rounded-lg border border-stone-200 bg-stone-50 p-4 xl:col-span-2">
+          <div className="rounded-lg border border-stone-200 bg-stone-50 p-4 sm:col-span-2 xl:col-span-2">
             <p className="text-sm font-semibold text-stone-500">Valor total automático</p>
             <p className="mt-2 text-2xl font-semibold text-farm-green">{formatCurrency(valorTotalVenda)}</p>
           </div>
-          <button type="submit" className="flex h-16 items-center justify-center gap-2 rounded-lg bg-farm-green px-5 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink xl:col-span-2">
+          <button type="submit" className="flex h-14 items-center justify-center gap-2 rounded-lg bg-farm-green px-5 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink sm:col-span-2 xl:col-span-2">
             <Save className="h-5 w-5" aria-hidden="true" />
             Registrar venda
           </button>
         </form>
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
+      <section className="rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="border-b border-stone-200 p-5">
           <h2 className="text-lg font-semibold">Vendas de ovos</h2>
           <p className="mt-1 text-sm text-stone-500">Histórico salvo em localStorage com status financeiro.</p>
         </div>
         <div className="overflow-x-auto">
+          <p className="px-5 pb-1 pt-3 text-xs text-stone-400 md:hidden">← Deslize para ver todas as colunas</p>
           <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="bg-stone-50 text-xs uppercase text-stone-500">
               <tr>
@@ -1485,8 +1489,14 @@ function InventoryPage() {
             </div>
             <p className="mt-3 text-sm font-medium">Mínimo: {formatNumber(item.estoqueMinimo)} {item.unidade} · {statusLabel(item.status)}</p>
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <input className="table-input bg-white/70" type="number" value={item.quantidadeAtual} onChange={(event) => updateInventoryItem(item.id, "quantidadeAtual", event.target.value)} aria-label={`Quantidade de ${item.nome}`} />
-              <input className="table-input bg-white/70" type="number" value={item.estoqueMinimo} onChange={(event) => updateInventoryItem(item.id, "estoqueMinimo", event.target.value)} aria-label={`Mínimo de ${item.nome}`} />
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Atual</span>
+                <input className="table-input bg-white/70" type="number" value={item.quantidadeAtual} onChange={(event) => updateInventoryItem(item.id, "quantidadeAtual", event.target.value)} aria-label={`Quantidade de ${item.nome}`} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Mínimo</span>
+                <input className="table-input bg-white/70" type="number" value={item.estoqueMinimo} onChange={(event) => updateInventoryItem(item.id, "estoqueMinimo", event.target.value)} aria-label={`Mínimo de ${item.nome}`} />
+              </label>
             </div>
           </article>
         ))}
@@ -1563,8 +1573,8 @@ function FarmMapPage() {
         <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">4.000 poedeiras</span>
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.35fr_0.85fr]">
-        <div className="relative min-h-[460px] overflow-hidden rounded-lg border border-stone-200 bg-[#dfead2] p-4">
+      <div className="mt-5 grid gap-4 lg:grid-cols-[1.35fr_0.85fr]">
+        <div className="relative min-h-[320px] overflow-hidden rounded-lg border border-stone-200 bg-[#dfead2] p-4 sm:min-h-[460px]">
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,.35)_1px,transparent_1px),linear-gradient(rgba(255,255,255,.35)_1px,transparent_1px)] bg-[size:36px_36px]" />
           <div className="absolute left-[48%] top-0 h-full w-[7%] bg-stone-300/70" />
           <div className="absolute bottom-[40%] left-0 h-[8%] w-full bg-stone-300/70" />
@@ -1659,7 +1669,7 @@ function MobileSidebar({
               <p className="text-xs text-white/60">Sítio do Bem</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10" aria-label="Fechar menu">
+          <button type="button" onClick={onClose} className="flex h-11 w-11 items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10" aria-label="Fechar menu">
             <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
@@ -1688,8 +1698,8 @@ function MobileSidebar({
 
 function MobileNavButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof Egg; label: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} className={`flex h-12 w-full items-center gap-3 rounded-lg px-3 text-sm font-semibold transition ${active ? "bg-white text-farm-ink" : "text-white/70 hover:bg-white/10 hover:text-white"}`}>
-      <Icon className="h-5 w-5" aria-hidden="true" />
+    <button type="button" onClick={onClick} className={`flex h-14 w-full items-center gap-3 rounded-xl px-4 text-base font-semibold transition ${active ? "bg-white text-farm-ink shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}>
+      <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
       {label}
     </button>
   );
@@ -1717,14 +1727,14 @@ function RoleSwitch({
       <button
         type="button"
         onClick={() => onChange("granjeiro")}
-        className={`h-10 rounded-md px-3 text-sm font-semibold transition ${role === "granjeiro" ? activeClass : inactiveClass}`}
+        className={`h-11 rounded-md px-3 text-sm font-semibold transition ${role === "granjeiro" ? activeClass : inactiveClass}`}
       >
         Granjeiro
       </button>
       <button
         type="button"
         onClick={() => onChange("manager")}
-        className={`h-10 rounded-md px-3 text-sm font-semibold transition ${role === "manager" ? activeClass : inactiveClass}`}
+        className={`h-11 rounded-md px-3 text-sm font-semibold transition ${role === "manager" ? activeClass : inactiveClass}`}
       >
         Empresário
       </button>
