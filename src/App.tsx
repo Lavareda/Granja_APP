@@ -17,6 +17,7 @@ import {
   Feather,
   FileText,
   Home,
+  Info,
   Layers3,
   LogOut,
   Map,
@@ -1270,22 +1271,22 @@ function DailyRecordPage() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Data" error={errors.data}>
+          <Field label="Data" error={errors.data} tooltip="Data em que os dados foram coletados.">
             <input type="date" value={form.data} onChange={(e) => updateField("data", e.target.value)} className="field-input" />
           </Field>
-          <Field label="Lote" error={errors.lote}>
+          <Field label="Lote" error={errors.lote} tooltip="Lote de aves ao qual este registro pertence.">
             <select value={form.lote} onChange={(e) => updateField("lote", e.target.value)} className="field-input">
               {flocks.map((f) => <option key={f.id}>{f.nome}</option>)}
             </select>
           </Field>
-          <NumberField label="Ovos produzidos" icon={Egg} value={form.ovosProduzidos} error={errors.ovosProduzidos} placeholder="Ex: 3502" onChange={(v) => updateField("ovosProduzidos", v)} />
-          <NumberField label="Ovos quebrados" icon={AlertCircle} value={form.ovosQuebrados} error={errors.ovosQuebrados} placeholder="Ex: 46" onChange={(v) => updateField("ovosQuebrados", v)} />
-          <NumberField label="Mortalidade" icon={Feather} value={form.mortalidade} error={errors.mortalidade} placeholder="Ex: 6" onChange={(v) => updateField("mortalidade", v)} />
-          <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(v) => updateField("descarte", v)} />
-          <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 482" onChange={(v) => updateField("racaoKg", v)} />
-          <NumberField label="Consumo de água (L)" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(v) => updateField("agua", v)} />
-          <NumberField label="Temperatura (°C)" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(v) => updateField("temperatura", v)} />
-          <Field label="Observações" error={errors.observacoes} className="sm:col-span-2">
+          <NumberField label="Ovos produzidos" icon={Egg} value={form.ovosProduzidos} error={errors.ovosProduzidos} placeholder="Ex: 3502" onChange={(v) => updateField("ovosProduzidos", v)} tooltip="Total de ovos coletados no dia, sem descontos." />
+          <NumberField label="Ovos quebrados" icon={AlertCircle} value={form.ovosQuebrados} error={errors.ovosQuebrados} placeholder="Ex: 46" onChange={(v) => updateField("ovosQuebrados", v)} tooltip="Ovos danificados ou inutilizáveis durante a coleta." />
+          <NumberField label="Mortalidade" icon={Feather} value={form.mortalidade} error={errors.mortalidade} placeholder="Ex: 6" onChange={(v) => updateField("mortalidade", v)} tooltip="Número de aves encontradas mortas no período." />
+          <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(v) => updateField("descarte", v)} tooltip="Ovos descartados por baixa qualidade ou avaria." />
+          <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 482" onChange={(v) => updateField("racaoKg", v)} tooltip="Quantidade de ração consumida pelo lote durante o dia." />
+          <NumberField label="Consumo de água (L)" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(v) => updateField("agua", v)} tooltip="Volume de água consumido pelo lote no dia, em litros." />
+          <NumberField label="Temperatura (°C)" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(v) => updateField("temperatura", v)} tooltip="Temperatura média registrada no galpão durante o dia." />
+          <Field label="Observações" error={errors.observacoes} className="sm:col-span-2" tooltip="Anotações sobre ocorrências e manejo do dia.">
             <textarea value={form.observacoes} onChange={(e) => updateField("observacoes", e.target.value)} rows={3} className="field-input h-auto min-h-[88px] resize-none py-3" />
           </Field>
         </div>
@@ -1584,25 +1585,25 @@ function FinancePage() {
         </div>
 
         <form onSubmit={handleSaleSubmit} className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Field label="Data da venda">
+          <Field label="Data da venda" tooltip="Data em que a venda foi realizada.">
             <input type="date" className="field-input" value={saleForm.dataVenda} onChange={(event) => updateSaleForm("dataVenda", event.target.value)} />
           </Field>
-          <Field label="Cliente">
+          <Field label="Cliente" tooltip="Nome do comprador ou empresa compradora.">
             <input className="field-input" value={saleForm.cliente} onChange={(event) => updateSaleForm("cliente", event.target.value)} placeholder="Ex: Mercado São José" />
           </Field>
-          <Field label="Quantidade de dúzias">
+          <Field label="Quantidade de dúzias" tooltip="Número de dúzias (12 ovos cada) vendidas.">
             <input type="number" min="0" step="1" className="field-input" value={saleForm.quantidadeDuzias} onChange={(event) => updateSaleForm("quantidadeDuzias", event.target.value)} />
           </Field>
-          <Field label="Quantidade de caixas">
+          <Field label="Quantidade de caixas" tooltip="Número de caixas vendidas. Cada caixa equivale a 30 dúzias (360 ovos).">
             <input type="number" min="0" step="1" className="field-input" value={saleForm.quantidadeCaixas} onChange={(event) => updateSaleForm("quantidadeCaixas", event.target.value)} />
           </Field>
-          <Field label="Preço por dúzia">
+          <Field label="Preço por dúzia" tooltip="Valor cobrado por cada dúzia de ovos (R$).">
             <input type="number" min="0" step="0.01" className="field-input" value={saleForm.precoPorDuzia} onChange={(event) => updateSaleForm("precoPorDuzia", event.target.value)} />
           </Field>
-          <Field label="Preço por caixa">
+          <Field label="Preço por caixa" tooltip="Valor cobrado por cada caixa de ovos (R$).">
             <input type="number" min="0" step="0.01" className="field-input" value={saleForm.precoPorCaixa} onChange={(event) => updateSaleForm("precoPorCaixa", event.target.value)} />
           </Field>
-          <Field label="Forma de pagamento">
+          <Field label="Forma de pagamento" tooltip="Método utilizado pelo cliente para efetuar o pagamento.">
             <select className="field-input" value={saleForm.formaPagamento} onChange={(event) => updateSaleForm("formaPagamento", event.target.value)}>
               <option value="pix">Pix</option>
               <option value="dinheiro">Dinheiro</option>
@@ -1611,7 +1612,7 @@ function FinancePage() {
               <option value="transferencia">Transferência</option>
             </select>
           </Field>
-          <Field label="Status">
+          <Field label="Status" tooltip="Situação atual do pagamento desta venda.">
             <select className="field-input" value={saleForm.status} onChange={(event) => updateSaleForm("status", event.target.value)}>
               <option value="pago">Pago</option>
               <option value="pendente">Pendente</option>
@@ -1676,7 +1677,7 @@ function FinancePage() {
         <h2 className="text-lg font-semibold">Premissas financeiras</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {(["receitaDiaria", "receitaMensal", "precoPorDuzia", "precoPorCaixa", "custoRacao", "custoMaoDeObra", "energia", "medicamentos", "outrosCustos"] as Array<keyof FinancialRecord>).map((field) => (
-            <Field key={field} label={financialFieldLabel(field)}>
+            <Field key={field} label={financialFieldLabel(field)} tooltip={financialFieldTooltip(field)}>
               <input
                 type="number"
                 min="0"
@@ -2145,19 +2146,97 @@ function TabButton({ active, icon: Icon, label, onClick }: { active: boolean; ic
   );
 }
 
-function Field({ label, error, className = "", children }: { label: string; error?: string; className?: string; children: ReactNode }) {
+function FieldTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function close(e: MouseEvent | TouchEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  return (
+    <span ref={ref} className="relative inline-flex shrink-0 items-center">
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={(e) => { if (!ref.current?.contains(e.relatedTarget as Node)) setOpen(false); }}
+        aria-label="Ajuda sobre este campo"
+        aria-expanded={open}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-stone-400 transition-colors hover:text-farm-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-farm-green focus-visible:ring-offset-1"
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <>
+          {/* Desktop: positioned tooltip below icon */}
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-52 -translate-x-1/2 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-xs leading-relaxed text-stone-600 shadow-xl sm:block"
+          >
+            <span className="absolute -top-1.5 left-1/2 block h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t border-stone-200 bg-white" aria-hidden="true" />
+            {text}
+          </span>
+
+          {/* Mobile: fixed bottom sheet */}
+          <span
+            role="tooltip"
+            className="fixed bottom-6 left-4 right-4 z-50 flex items-start gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-4 text-sm leading-relaxed text-stone-700 shadow-2xl animate-fade-in sm:hidden"
+          >
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-farm-green" aria-hidden="true" />
+            <span className="flex-1">{text}</span>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); }}
+              aria-label="Fechar dica"
+              className="shrink-0 rounded-full p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-600"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+function Field({ label, error, className = "", tooltip, children }: { label: string; error?: string; className?: string; tooltip?: string; children: ReactNode }) {
   return (
     <label className={`block ${className}`}>
-      <span className="mb-2 block text-sm font-semibold text-farm-ink">{label}</span>
+      <span className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-farm-ink">
+        {label}
+        {tooltip && <FieldTooltip text={tooltip} />}
+      </span>
       {children}
       {error ? <span className="mt-2 block text-sm font-medium text-red-600">{error}</span> : null}
     </label>
   );
 }
 
-function NumberField({ label, icon: Icon, value, error, placeholder, onChange }: { label: string; icon: typeof Egg; value: string; error?: string; placeholder: string; onChange: (value: string) => void }) {
+function NumberField({ label, icon: Icon, value, error, placeholder, onChange, tooltip }: { label: string; icon: typeof Egg; value: string; error?: string; placeholder: string; onChange: (value: string) => void; tooltip?: string }) {
   return (
-    <Field label={label} error={error}>
+    <Field label={label} error={error} tooltip={tooltip}>
       <div className="relative">
         <Icon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-stone-400" />
         <input type="number" min="0" step="0.1" inputMode="decimal" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} className="field-input pl-12" />
@@ -2179,6 +2258,21 @@ function financialFieldLabel(field: keyof FinancialRecord) {
     outrosCustos: "Outros custos",
   };
   return labels[field] ?? String(field);
+}
+
+function financialFieldTooltip(field: keyof FinancialRecord): string | undefined {
+  const tooltips: Partial<Record<keyof FinancialRecord, string>> = {
+    receitaDiaria: "Receita bruta média estimada por dia de operação.",
+    receitaMensal: "Receita bruta total estimada no mês.",
+    precoPorDuzia: "Preço médio de venda por dúzia de ovos (12 unidades).",
+    precoPorCaixa: "Preço médio de venda por caixa (30 dúzias / 360 ovos).",
+    custoRacao: "Gasto diário com ração para o lote em produção.",
+    custoMaoDeObra: "Gasto diário com salários e encargos de funcionários.",
+    energia: "Gasto diário com energia elétrica no aviário.",
+    medicamentos: "Gasto diário com medicamentos, vitaminas e vacinas.",
+    outrosCustos: "Demais custos operacionais não listados acima.",
+  };
+  return tooltips[field];
 }
 
 export default App;
