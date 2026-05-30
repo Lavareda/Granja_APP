@@ -1,5 +1,5 @@
 import { Session, User } from "@supabase/supabase-js";
-import { createContext, FormEvent, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, FormEvent, ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -23,11 +23,13 @@ import {
   Menu,
   NotebookPen,
   Package,
+  Pencil,
   Save,
   Settings,
   Sparkles,
   ThermometerSun,
   Tractor,
+  Trash2,
   TrendingUp,
   Wheat,
   X,
@@ -143,6 +145,9 @@ type FarmDataContextValue = {
   latestFinance: FinancialRecord;
   dashboard: DashboardData;
   addDailyRecord: (record: Omit<DailyRecord, "id">) => void;
+  updateDailyRecord: (id: number, record: Omit<DailyRecord, "id">) => void;
+  deleteDailyRecord: (id: number) => void;
+  resetAllData: () => void;
   addEggSale: (sale: Omit<EggSale, "id">) => void;
   addFlock: () => void;
   updateFlock: (id: number, field: keyof Flock, value: string) => void;
@@ -482,6 +487,23 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     setRecords((current) => [...current, { ...record, id: Date.now() }]);
   }
 
+  function updateDailyRecord(id: number, record: Omit<DailyRecord, "id">) {
+    setRecords((current) => current.map((r) => (r.id === id ? { ...record, id } : r)));
+  }
+
+  function deleteDailyRecord(id: number) {
+    setRecords((current) => current.filter((r) => r.id !== id));
+  }
+
+  function resetAllData() {
+    setRecords(demoDailyRecords);
+    setFlocks(demoFlocks);
+    setFinancialRecords(demoFinancialRecords);
+    setSales(demoEggSales);
+    setInventory(demoInventory);
+    Object.values(storageKeys).forEach((key) => window.localStorage.removeItem(key));
+  }
+
   function addEggSale(sale: Omit<EggSale, "id">) {
     setSales((current) => [{ ...sale, id: Date.now() }, ...current]);
     setFinancialRecords((current) => {
@@ -564,6 +586,9 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       latestFinance,
       dashboard,
       addDailyRecord,
+      updateDailyRecord,
+      deleteDailyRecord,
+      resetAllData,
       addEggSale,
       addFlock,
       updateFlock,
@@ -867,18 +892,14 @@ function AppShell() {
   const initialPage = pathToPage(location.pathname) ?? loadFromStorage(storageKeys.page, "dashboard", isPage);
   const [role, setRole] = useState<AccessRole>(() => loadFromStorage(storageKeys.role, "manager", isAccessRole));
   const [page, setPage] = useState<Page>(() => (canAccessPage(role, initialPage) ? initialPage : "records"));
-  const [form, setForm] = useState<DailyRecordForm>(() => ({ ...initialForm, ...loadFromStorage(storageKeys.form, initialForm, isDailyRecordForm) }));
-  const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
-  const [showSuccess, setShowSuccess] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(() => !loadFromStorage(storageKeys.onboarding, false));
-  const { addDailyRecord } = useFarmData();
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const { resetAllData } = useFarmData();
   const { signOut, user } = useAuth();
   const navigate = useNavigate();
   const visibleNavItems = getVisibleNavItems(role);
 
   useEffect(() => saveToStorage(storageKeys.page, page), [page]);
-  useEffect(() => saveToStorage(storageKeys.form, form), [form]);
   useEffect(() => saveToStorage(storageKeys.role, role), [role]);
   useEffect(() => {
     const routePage = pathToPage(location.pathname);
@@ -898,49 +919,6 @@ function AppShell() {
       navigate(pageToPath("records"), { replace: true });
     }
   }, [role, page, navigate]);
-
-  function updateField(field: keyof DailyRecordForm, value: string) {
-    setForm((current) => ({ ...current, [field]: value }));
-    setErrors((current) => ({ ...current, [field]: undefined }));
-    setShowSuccess(false);
-  }
-
-  function validate() {
-    const nextErrors: Partial<Record<keyof DailyRecordForm, string>> = {};
-    if (!form.data) nextErrors.data = "Informe a data.";
-    if (!form.lote.trim()) nextErrors.lote = "Informe o lote.";
-
-    numericFields.forEach((field) => {
-      const value = form[field].trim();
-      const numberValue = parseNumber(value);
-      if (!value) nextErrors[field] = `Informe ${fieldLabels[field].toLowerCase()}.`;
-      else if (Number.isNaN(numberValue) || numberValue < 0) nextErrors[field] = "Use um número maior ou igual a zero.";
-    });
-
-    return nextErrors;
-  }
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextErrors = validate();
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
-    addDailyRecord({
-      data: form.data,
-      lote: form.lote,
-      ovosProduzidos: parseNumber(form.ovosProduzidos),
-      ovosQuebrados: parseNumber(form.ovosQuebrados),
-      mortalidade: parseNumber(form.mortalidade),
-      descarte: parseNumber(form.descarte),
-      racaoKg: parseNumber(form.racaoKg),
-      agua: parseNumber(form.agua),
-      temperatura: parseNumber(form.temperatura),
-      observacoes: form.observacoes,
-    });
-    setForm({ ...initialForm, data: form.data, lote: form.lote });
-    setShowSuccess(true);
-  }
 
   async function handleLogout() {
     await signOut();
@@ -963,16 +941,15 @@ function AppShell() {
     }
   }
 
-  function dismissOnboarding() {
-    saveToStorage(storageKeys.onboarding, true);
-    setShowOnboarding(false);
+  function handleResetAll() {
+    resetAllData();
+    setShowResetConfirm(false);
   }
 
   const pageTitle = navItems.find((item) => item.page === page)?.label ?? "Painel";
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f6f7f2] text-farm-ink">
-      {showOnboarding && <OnboardingModal onClose={dismissOnboarding} />}
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-[#f6f7f2]/95 px-4 py-3 backdrop-blur sm:py-4">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -988,7 +965,7 @@ function AppShell() {
                 <Tractor className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
                 <span className="truncate sm:hidden">GranjaApp</span>
                 <span className="hidden truncate sm:inline">GranjaApp · Sítio do Bem</span>
-                <span className="hidden shrink-0 rounded-full bg-farm-green px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo demonstração</span>
+                <span className="hidden shrink-0 rounded-full bg-amber-500 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo teste</span>
               </p>
               <h1 className="truncate text-xl font-bold text-farm-ink sm:text-2xl">{pageTitle}</h1>
             </div>
@@ -1023,20 +1000,42 @@ function AppShell() {
         onLogout={handleLogout}
       />
 
-      <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
-        {showSuccess ? (
-          <div className="mb-5 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-            <div>
-              <p className="font-semibold">Registro salvo e painel atualizado.</p>
-              <p className="mt-1 text-sm">Os KPIs já refletem o último lançamento local.</p>
+      <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+          <p className="text-xs text-amber-800">
+            ⚠ Ambiente de teste — os dados ficam salvos apenas neste navegador.
+          </p>
+          {showResetConfirm ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-amber-900">Confirmar?</span>
+              <button
+                onClick={handleResetAll}
+                className="rounded-md bg-red-600 px-3 py-1 text-xs font-bold text-white transition hover:bg-red-700"
+              >
+                Sim, limpar
+              </button>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+              >
+                Cancelar
+              </button>
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <button
+              onClick={() => setShowResetConfirm(true)}
+              className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+            >
+              Limpar dados de teste
+            </button>
+          )}
+        </div>
+      </div>
 
+      <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
         <div key={page} className="animate-fade-in">
           {page === "dashboard" ? <DashboardPage onNewRecord={() => goToPage("records")} /> : null}
-          {page === "records" ? <DailyRecordPage form={form} errors={errors} onChange={updateField} onSubmit={handleSubmit} /> : null}
+          {page === "records" ? <DailyRecordPage /> : null}
           {page === "flocks" ? <FlocksPage /> : null}
           {page === "finance" ? <FinancePage /> : null}
           {page === "inventory" ? <InventoryPage /> : null}
@@ -1137,61 +1136,291 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
   );
 }
 
-function DailyRecordPage({
-  form,
-  errors,
-  onChange,
-  onSubmit,
-}: {
-  form: DailyRecordForm;
-  errors: Partial<Record<keyof DailyRecordForm, string>>;
-  onChange: (field: keyof DailyRecordForm, value: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const { flocks } = useFarmData();
+function DailyRecordPage() {
+  const { records, flocks, mainFlock, addDailyRecord, updateDailyRecord, deleteDailyRecord } = useFarmData();
+  const activeBirds = mainFlock?.quantidadeAtual ?? defaultFlockSize;
+  const sortedRecords = useMemo(() => [...records].sort((a, b) => b.data.localeCompare(a.data)), [records]);
+
+  const [form, setForm] = useState<DailyRecordForm>(() => ({
+    ...initialForm,
+    ...loadFromStorage(storageKeys.form, initialForm, isDailyRecordForm),
+  }));
+  const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saved, setSaved] = useState<"create" | "update" | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => { saveToStorage(storageKeys.form, form); }, [form]);
+
+  function updateField(field: keyof DailyRecordForm, value: string) {
+    setForm((c) => ({ ...c, [field]: value }));
+    setErrors((c) => ({ ...c, [field]: undefined }));
+    setSaved(null);
+  }
+
+  function validate() {
+    const next: Partial<Record<keyof DailyRecordForm, string>> = {};
+    if (!form.data) next.data = "Informe a data.";
+    if (!form.lote.trim()) next.lote = "Informe o lote.";
+    numericFields.forEach((field) => {
+      const v = form[field].trim();
+      const n = parseNumber(v);
+      if (!v) next[field] = `Informe ${fieldLabels[field].toLowerCase()}.`;
+      else if (Number.isNaN(n) || n < 0) next[field] = "Use um número ≥ 0.";
+    });
+    return next;
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextErrors = validate();
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    const data = {
+      data: form.data,
+      lote: form.lote,
+      ovosProduzidos: parseNumber(form.ovosProduzidos),
+      ovosQuebrados: parseNumber(form.ovosQuebrados),
+      mortalidade: parseNumber(form.mortalidade),
+      descarte: parseNumber(form.descarte),
+      racaoKg: parseNumber(form.racaoKg),
+      agua: parseNumber(form.agua),
+      temperatura: parseNumber(form.temperatura),
+      observacoes: form.observacoes,
+    };
+
+    if (editingId !== null) {
+      updateDailyRecord(editingId, data);
+      setSaved("update");
+      setEditingId(null);
+    } else {
+      addDailyRecord(data);
+      setSaved("create");
+    }
+    setForm({ ...initialForm, data: form.data, lote: form.lote });
+  }
+
+  function startEdit(record: DailyRecord) {
+    setEditingId(record.id);
+    setForm({
+      data: record.data,
+      lote: record.lote,
+      ovosProduzidos: String(record.ovosProduzidos),
+      ovosQuebrados: String(record.ovosQuebrados),
+      mortalidade: String(record.mortalidade),
+      descarte: String(record.descarte),
+      racaoKg: String(record.racaoKg),
+      agua: String(record.agua),
+      temperatura: String(record.temperatura),
+      observacoes: record.observacoes,
+    });
+    setErrors({});
+    setSaved(null);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm({ ...initialForm });
+    setErrors({});
+    setSaved(null);
+  }
+
+  function executeDelete() {
+    if (confirmDeleteId === null) return;
+    deleteDailyRecord(confirmDeleteId);
+    if (editingId === confirmDeleteId) cancelEdit();
+    setConfirmDeleteId(null);
+  }
 
   return (
-    <form onSubmit={onSubmit} className="rounded-lg border border-stone-200 bg-white p-4 shadow-panel sm:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-farm-lime text-farm-green">
-          <NotebookPen className="h-5 w-5" aria-hidden="true" />
-        </span>
-        <div>
-          <h2 className="text-lg font-semibold">Dados do dia</h2>
-          <p className="mt-1 text-sm text-stone-500">Preencha e salve para atualizar o painel em localStorage.</p>
+    <div className="space-y-5">
+      {/* Banner de feedback */}
+      {saved && (
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-800 animate-fade-in">
+          <CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden="true" />
+          <p className="font-semibold">
+            {saved === "create" ? "Registro criado — painel atualizado." : "Registro atualizado com sucesso."}
+          </p>
         </div>
-      </div>
+      )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Data" error={errors.data}>
-          <input type="date" value={form.data} onChange={(event) => onChange("data", event.target.value)} className="field-input" />
-        </Field>
-        <Field label="Lote" error={errors.lote}>
-          <select value={form.lote} onChange={(event) => onChange("lote", event.target.value)} className="field-input">
-            {flocks.map((flock) => (
-              <option key={flock.id}>{flock.nome}</option>
-            ))}
-          </select>
-        </Field>
-        <NumberField label="Ovos produzidos" icon={Egg} value={form.ovosProduzidos} error={errors.ovosProduzidos} placeholder="Ex: 3502" onChange={(value) => onChange("ovosProduzidos", value)} />
-        <NumberField label="Ovos quebrados" icon={AlertCircle} value={form.ovosQuebrados} error={errors.ovosQuebrados} placeholder="Ex: 46" onChange={(value) => onChange("ovosQuebrados", value)} />
-        <NumberField label="Mortalidade" icon={Feather} value={form.mortalidade} error={errors.mortalidade} placeholder="Ex: 6" onChange={(value) => onChange("mortalidade", value)} />
-        <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(value) => onChange("descarte", value)} />
-        <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 482" onChange={(value) => onChange("racaoKg", value)} />
-        <NumberField label="Consumo de água" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(value) => onChange("agua", value)} />
-        <NumberField label="Temperatura" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(value) => onChange("temperatura", value)} />
-        <Field label="Observações" error={errors.observacoes} className="sm:col-span-2">
-          <textarea value={form.observacoes} onChange={(event) => onChange("observacoes", event.target.value)} rows={4} className="field-input h-auto min-h-[108px] resize-none py-3" />
-        </Field>
-      </div>
+      {/* Formulário */}
+      <form ref={formRef} onSubmit={handleSubmit} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${editingId !== null ? "bg-amber-100 text-amber-600" : "bg-farm-lime text-farm-green"}`}>
+              <NotebookPen className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="text-lg font-bold">{editingId !== null ? "Editar registro" : "Novo registro"}</h2>
+              <p className="mt-0.5 text-sm text-stone-400">
+                {editingId !== null ? "Altere os campos e salve para atualizar." : "Preencha os dados do dia e salve."}
+              </p>
+            </div>
+          </div>
+          {editingId !== null && (
+            <button type="button" onClick={cancelEdit} className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-stone-200 px-3 text-sm font-semibold text-stone-500 transition hover:bg-stone-50">
+              <X className="h-4 w-4" aria-hidden="true" />
+              Cancelar
+            </button>
+          )}
+        </div>
 
-      <div className="sticky bottom-0 -mx-4 mt-6 border-t border-stone-200 bg-white/95 p-4 backdrop-blur sm:static sm:-mx-6 sm:-mb-6 sm:px-6">
-        <button type="submit" className="flex h-14 w-full items-center justify-center gap-2 rounded-lg bg-farm-green px-5 text-base font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink">
-          <Save className="h-5 w-5" aria-hidden="true" />
-          Salvar registro
-        </button>
-      </div>
-    </form>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Data" error={errors.data}>
+            <input type="date" value={form.data} onChange={(e) => updateField("data", e.target.value)} className="field-input" />
+          </Field>
+          <Field label="Lote" error={errors.lote}>
+            <select value={form.lote} onChange={(e) => updateField("lote", e.target.value)} className="field-input">
+              {flocks.map((f) => <option key={f.id}>{f.nome}</option>)}
+            </select>
+          </Field>
+          <NumberField label="Ovos produzidos" icon={Egg} value={form.ovosProduzidos} error={errors.ovosProduzidos} placeholder="Ex: 3502" onChange={(v) => updateField("ovosProduzidos", v)} />
+          <NumberField label="Ovos quebrados" icon={AlertCircle} value={form.ovosQuebrados} error={errors.ovosQuebrados} placeholder="Ex: 46" onChange={(v) => updateField("ovosQuebrados", v)} />
+          <NumberField label="Mortalidade" icon={Feather} value={form.mortalidade} error={errors.mortalidade} placeholder="Ex: 6" onChange={(v) => updateField("mortalidade", v)} />
+          <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(v) => updateField("descarte", v)} />
+          <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 482" onChange={(v) => updateField("racaoKg", v)} />
+          <NumberField label="Consumo de água (L)" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(v) => updateField("agua", v)} />
+          <NumberField label="Temperatura (°C)" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(v) => updateField("temperatura", v)} />
+          <Field label="Observações" error={errors.observacoes} className="sm:col-span-2">
+            <textarea value={form.observacoes} onChange={(e) => updateField("observacoes", e.target.value)} rows={3} className="field-input h-auto min-h-[88px] resize-none py-3" />
+          </Field>
+        </div>
+
+        <div className="sticky bottom-0 -mx-4 mt-6 border-t border-stone-200 bg-white/95 p-4 backdrop-blur sm:static sm:-mx-6 sm:-mb-6 sm:px-6">
+          <button type="submit" className={`flex h-14 w-full items-center justify-center gap-2 rounded-xl px-5 text-base font-bold text-white shadow-lg transition ${editingId !== null ? "bg-amber-500 hover:bg-amber-600" : "bg-farm-green hover:bg-farm-ink"}`}>
+            <Save className="h-5 w-5" aria-hidden="true" />
+            {editingId !== null ? "Atualizar registro" : "Salvar registro"}
+          </button>
+        </div>
+      </form>
+
+      {/* Lista de registros */}
+      <section className="rounded-xl border border-stone-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-stone-100 px-5 py-4">
+          <div>
+            <h2 className="font-bold text-farm-ink">Registros lançados</h2>
+            <p className="mt-0.5 text-xs text-stone-400">{records.length} registro{records.length !== 1 ? "s" : ""} neste navegador</p>
+          </div>
+        </div>
+
+        {records.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-stone-400">Nenhum registro ainda. Preencha o formulário acima.</p>
+        ) : (
+          <>
+            {/* Cards — mobile */}
+            <div className="divide-y divide-stone-100 md:hidden">
+              {sortedRecords.map((record) => (
+                <article key={record.id} className={`p-4 ${editingId === record.id ? "bg-amber-50" : ""}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-farm-ink">{record.lote}</p>
+                        {editingId === record.id && (
+                          <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold uppercase text-white">Editando</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-stone-500">
+                        {new Date(`${record.data}T00:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button onClick={() => startEdit(record)} aria-label="Editar" className="flex h-11 w-11 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition active:bg-stone-100 hover:border-farm-green hover:text-farm-green">
+                        <Pencil className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                      <button onClick={() => setConfirmDeleteId(record.id)} aria-label="Excluir" className="flex h-11 w-11 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition active:bg-red-50 hover:border-red-300 hover:text-red-600">
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {[
+                      ["Ovos", formatNumber(record.ovosProduzidos)],
+                      ["Postura", formatPercent(calcularPostura(record.ovosProduzidos, activeBirds))],
+                      ["Ração", `${record.racaoKg} kg`],
+                    ].map(([lbl, val]) => (
+                      <div key={lbl} className="rounded-lg bg-stone-50 p-2 text-center">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-stone-400">{lbl}</p>
+                        <p className="mt-0.5 text-sm font-bold text-farm-ink">{val}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {record.observacoes ? (
+                    <p className="mt-2 truncate text-xs text-stone-400">{record.observacoes}</p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+
+            {/* Tabela — desktop */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-stone-50 text-xs uppercase text-stone-500">
+                  <tr>
+                    <th className="px-4 py-3">Data</th>
+                    <th className="px-4 py-3">Lote</th>
+                    <th className="px-4 py-3">Ovos</th>
+                    <th className="px-4 py-3">Postura</th>
+                    <th className="px-4 py-3">Ração (kg)</th>
+                    <th className="px-4 py-3">Temp. (°C)</th>
+                    <th className="px-4 py-3">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {sortedRecords.map((record) => (
+                    <tr key={record.id} className={`transition ${editingId === record.id ? "bg-amber-50" : "hover:bg-stone-50"}`}>
+                      <td className="px-4 py-3 font-medium tabular-nums">{dateLabel(record.data)}</td>
+                      <td className="px-4 py-3">{record.lote}</td>
+                      <td className="px-4 py-3 tabular-nums">{formatNumber(record.ovosProduzidos)}</td>
+                      <td className="px-4 py-3 tabular-nums">{formatPercent(calcularPostura(record.ovosProduzidos, activeBirds))}</td>
+                      <td className="px-4 py-3 tabular-nums">{formatNumber(record.racaoKg, 1)}</td>
+                      <td className="px-4 py-3 tabular-nums">{formatNumber(record.temperatura, 1)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button onClick={() => startEdit(record)} aria-label="Editar registro" className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 text-stone-500 transition hover:border-farm-green hover:text-farm-green">
+                            <Pencil className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                          <button onClick={() => setConfirmDeleteId(record.id)} aria-label="Excluir registro" className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 text-stone-500 transition hover:border-red-300 hover:text-red-600">
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Modal de confirmação de exclusão */}
+      {confirmDeleteId !== null && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-farm-ink/50 px-4 pb-8 backdrop-blur-sm sm:items-center sm:pb-0">
+          <div className="w-full max-w-sm animate-fade-in rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-farm-ink">Excluir registro?</h3>
+            <p className="mt-2 text-sm text-stone-500">Esta ação não pode ser desfeita.</p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setConfirmDeleteId(null)}
+                className="flex h-12 items-center justify-center rounded-xl border border-stone-200 font-semibold text-stone-600 transition hover:bg-stone-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={executeDelete}
+                className="flex h-12 items-center justify-center rounded-xl bg-red-600 font-bold text-white transition hover:bg-red-700"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
