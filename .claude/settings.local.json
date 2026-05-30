@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/c/Users/d_lav/Desktop/granja-app/src/**)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}
