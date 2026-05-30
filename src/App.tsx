@@ -84,7 +84,7 @@ const demoNotifications: Notification[] = [
   { id: "n1", title: "Mortalidade acima da meta", message: "Lote A-2025: 6 aves — acima do limite diário", status: "atencao", time: "há 2h", read: false },
   { id: "n2", title: "Estoque de ração baixo", message: "2.850 kg disponíveis — mínimo: 3.200 kg", status: "critico", time: "há 4h", read: false },
   { id: "n3", title: "Produção abaixo do esperado", message: "Postura: 89,1% — meta: 92,0%", status: "atencao", time: "há 6h", read: false },
-  { id: "n4", title: "Temperatura elevada — Galpão 2", message: "29,1 °C registrada — reforçar ventilação", status: "atencao", time: "há 8h", read: true },
+  { id: "n4", title: "Temperatura elevada — Lote 2", message: "29,1 °C registrada — reforçar ventilação", status: "atencao", time: "há 8h", read: true },
 ];
 
 type DailyRecordForm = {
@@ -1285,7 +1285,7 @@ function DailyRecordPage() {
           <NumberField label="Descarte" icon={ClipboardList} value={form.descarte} error={errors.descarte} placeholder="Ex: 8" onChange={(v) => updateField("descarte", v)} tooltip="Ovos descartados por baixa qualidade ou avaria." />
           <NumberField label="Consumo de ração (kg)" icon={Wheat} value={form.racaoKg} error={errors.racaoKg} placeholder="Ex: 482" onChange={(v) => updateField("racaoKg", v)} tooltip="Quantidade de ração consumida pelo lote durante o dia." />
           <NumberField label="Consumo de água (L)" icon={Droplets} value={form.agua} error={errors.agua} placeholder="Ex: 940" onChange={(v) => updateField("agua", v)} tooltip="Volume de água consumido pelo lote no dia, em litros." />
-          <NumberField label="Temperatura (°C)" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(v) => updateField("temperatura", v)} tooltip="Temperatura média registrada no galpão durante o dia." />
+          <NumberField label="Temperatura (°C)" icon={ThermometerSun} value={form.temperatura} error={errors.temperatura} placeholder="Ex: 28,7" onChange={(v) => updateField("temperatura", v)} tooltip="Temperatura média registrada no lote durante o dia." />
           <Field label="Observações" error={errors.observacoes} className="sm:col-span-2" tooltip="Anotações sobre ocorrências e manejo do dia.">
             <textarea value={form.observacoes} onChange={(e) => updateField("observacoes", e.target.value)} rows={3} className="field-input h-auto min-h-[88px] resize-none py-3" />
           </Field>

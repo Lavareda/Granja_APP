@@ -122,7 +122,7 @@ export const demoDailyRecords: DailyRecord[] = [
     racaoKg: 472,
     agua: 930,
     temperatura: 25.8,
-    observacoes: "Ajuste de ventilação no Galpão 2.",
+    observacoes: "Ajuste de ventilação no Lote 2.",
   },
   {
     id: 3,
@@ -316,8 +316,8 @@ export const demoInventory: InventoryItem[] = inventorySeed.map((item) => ({
 
 export const demoFarmAreas: FarmArea[] = [
   {
-    id: "galpao-1",
-    nome: "Galpão 1",
+    id: "lote-1",
+    nome: "Lote 1",
     className: "left-[6%] top-[12%] h-[24%] w-[36%] bg-farm-green",
     producao: "1.762 ovos",
     aves: "1.964 aves",
@@ -326,14 +326,14 @@ export const demoFarmAreas: FarmArea[] = [
     alertas: [],
   },
   {
-    id: "galpao-2",
-    nome: "Galpão 2",
+    id: "lote-2",
+    nome: "Lote 2",
     className: "right-[7%] top-[12%] h-[24%] w-[36%] bg-farm-leaf",
     producao: "1.740 ovos",
     aves: "1.964 aves",
     temperatura: "29,1 °C",
     estoqueRelacionado: "Ração: 1.430 kg",
-    alertas: [{ id: "temp-g2", titulo: "Temperatura elevada", detalhe: "Reforçar ventilação", status: "atencao" }],
+    alertas: [{ id: "temp-l2", titulo: "Temperatura elevada", detalhe: "Reforçar ventilação no Lote 2", status: "atencao" }],
   },
   {
     id: "deposito-racao",
