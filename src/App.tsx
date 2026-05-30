@@ -46,6 +46,13 @@ import {
   today,
 } from "./data/demoData";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
+import {
+  fetchDailyRecords,
+  insertDailyRecord,
+  updateDailyRecord as updateDailyRecordDb,
+  deleteDailyRecord as deleteDailyRecordDb,
+  translateDbError,
+} from "./services/recordsService";
 import type {
   Alert,
   AlertStatus,
@@ -145,9 +152,11 @@ type FarmDataContextValue = {
   mainFlock?: Flock;
   latestFinance: FinancialRecord;
   dashboard: DashboardData;
-  addDailyRecord: (record: Omit<DailyRecord, "id">) => void;
-  updateDailyRecord: (id: number, record: Omit<DailyRecord, "id">) => void;
-  deleteDailyRecord: (id: number) => void;
+  isLoading: boolean;
+  dbError: string | null;
+  addDailyRecord: (record: Omit<DailyRecord, "id">) => Promise<void>;
+  updateDailyRecord: (id: number, record: Omit<DailyRecord, "id">) => Promise<void>;
+  deleteDailyRecord: (id: number) => Promise<void>;
   resetAllData: () => void;
   addEggSale: (sale: Omit<EggSale, "id">) => void;
   addFlock: () => void;
@@ -165,7 +174,8 @@ type AuthContextValue = {
   signOut: () => Promise<void>;
 };
 
-const isDemoMode = true;
+/** Demo mode is active whenever Supabase env variables are not configured. */
+const isDemoMode = !isSupabaseConfigured;
 const storageKeys = {
   records: "granjaapp.dailyRecords.v2",
   flocks: "granjaapp.flocks.v1",
@@ -426,6 +436,8 @@ function useAuth() {
 }
 
 function FarmDataProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+
   const [records, setRecords] = useState<DailyRecord[]>(() => loadFromStorage(storageKeys.records, demoDailyRecords, isRecordList));
   const [flocks, setFlocks] = useState<Flock[]>(() => loadFromStorage(storageKeys.flocks, demoFlocks, isFlockList));
   const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
@@ -433,9 +445,23 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   );
   const [sales, setSales] = useState<EggSale[]>(() => loadFromStorage(storageKeys.sales, demoEggSales, isEggSaleList));
   const [inventory, setInventory] = useState<InventoryItem[]>(() => loadFromStorage(storageKeys.inventory, demoInventory, isInventoryList));
+  const [isLoading, setIsLoading] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
   const farmAreas = demoFarmAreas;
 
-  useEffect(() => saveToStorage(storageKeys.records, records), [records]);
+  // When Supabase is configured and the user is logged in, fetch records from the DB.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !user) return;
+    setIsLoading(true);
+    setDbError(null);
+    fetchDailyRecords(user.id)
+      .then((data) => setRecords(data))
+      .catch((err: Error) => setDbError(translateDbError(err.message)))
+      .finally(() => setIsLoading(false));
+  }, [user?.id]); // re-fetch when user changes (login / logout)
+
+  // Persist to localStorage only in demo mode (Supabase stores the real data).
+  useEffect(() => { if (isDemoMode) saveToStorage(storageKeys.records, records); }, [records]);
   useEffect(() => saveToStorage(storageKeys.flocks, flocks), [flocks]);
   useEffect(() => saveToStorage(storageKeys.finance, financialRecords), [financialRecords]);
   useEffect(() => saveToStorage(storageKeys.sales, sales), [sales]);
@@ -484,16 +510,62 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     };
   }, [records, sortedRecords, latestRecord, mainFlock, latestFinance, inventory, receitaHoje]);
 
-  function addDailyRecord(record: Omit<DailyRecord, "id">) {
-    setRecords((current) => [...current, { ...record, id: Date.now() }]);
+  async function addDailyRecord(record: Omit<DailyRecord, "id">): Promise<void> {
+    setDbError(null);
+    if (isSupabaseConfigured && user) {
+      try {
+        const saved = await insertDailyRecord(record, user.id);
+        setRecords((current) => [saved, ...current]);
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    } else {
+      setRecords((current) => [...current, { ...record, id: Date.now() }]);
+    }
   }
 
-  function updateDailyRecord(id: number, record: Omit<DailyRecord, "id">) {
-    setRecords((current) => current.map((r) => (r.id === id ? { ...record, id } : r)));
+  async function updateDailyRecord(id: number, record: Omit<DailyRecord, "id">): Promise<void> {
+    setDbError(null);
+    if (isSupabaseConfigured && user) {
+      const existing = records.find((r) => r.id === id);
+      if (!existing?.supabaseId) {
+        setDbError("Registro não encontrado no banco de dados.");
+        throw new Error("supabaseId missing");
+      }
+      try {
+        const saved = await updateDailyRecordDb(existing.supabaseId, record, user.id);
+        setRecords((current) => current.map((r) => (r.id === id ? saved : r)));
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    } else {
+      setRecords((current) => current.map((r) => (r.id === id ? { ...record, id } : r)));
+    }
   }
 
-  function deleteDailyRecord(id: number) {
-    setRecords((current) => current.filter((r) => r.id !== id));
+  async function deleteDailyRecord(id: number): Promise<void> {
+    setDbError(null);
+    if (isSupabaseConfigured && user) {
+      const existing = records.find((r) => r.id === id);
+      if (!existing?.supabaseId) {
+        setDbError("Registro não encontrado no banco de dados.");
+        throw new Error("supabaseId missing");
+      }
+      try {
+        await deleteDailyRecordDb(existing.supabaseId, user.id);
+        setRecords((current) => current.filter((r) => r.id !== id));
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    } else {
+      setRecords((current) => current.filter((r) => r.id !== id));
+    }
   }
 
   function resetAllData() {
@@ -586,6 +658,8 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       mainFlock,
       latestFinance,
       dashboard,
+      isLoading,
+      dbError,
       addDailyRecord,
       updateDailyRecord,
       deleteDailyRecord,
@@ -596,7 +670,8 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       updateFinancialRecord,
       updateInventoryItem,
     }),
-    [records, flocks, financialRecords, sales, inventory, latestRecord, mainFlock, latestFinance, dashboard],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [records, flocks, financialRecords, sales, inventory, latestRecord, mainFlock, latestFinance, dashboard, isLoading, dbError],
   );
 
   return <FarmDataContext.Provider value={value}>{children}</FarmDataContext.Provider>;
@@ -1051,15 +1126,39 @@ function AppShell() {
 }
 
 function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
-  const { records, latestRecord, dashboard, mainFlock } = useFarmData();
+  const { records, latestRecord, dashboard, mainFlock, isLoading, dbError } = useFarmData();
   const activeBirds = mainFlock?.quantidadeAtual ?? defaultFlockSize;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-5 animate-fade-in">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-2">
+            <div className="h-6 w-52 animate-shimmer rounded" />
+            <div className="h-4 w-72 animate-shimmer rounded" />
+          </div>
+          <div className="h-12 w-full animate-shimmer rounded-lg sm:w-36" />
+        </div>
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)}
+        </section>
+        <div className="h-64 animate-shimmer rounded-xl" />
+      </div>
+    );
+  }
+
+  if (dbError) {
+    return <DbErrorBanner message={dbError} />;
+  }
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold text-farm-ink">Resumo operacional</h2>
-          <p className="mt-1 text-sm text-stone-400">{records.length} registros · granja com 4.000 poedeiras · dados de demonstração</p>
+          <p className="mt-1 text-sm text-stone-400">
+            {records.length} registro{records.length !== 1 ? "s" : ""} · {isDemoMode ? "dados de demonstração" : "sincronizado com Supabase"}
+          </p>
         </div>
         <button onClick={onNewRecord} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink sm:w-auto">
           <NotebookPen className="h-5 w-5" aria-hidden="true" />
@@ -1138,7 +1237,7 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
 }
 
 function DailyRecordPage() {
-  const { records, flocks, mainFlock, addDailyRecord, updateDailyRecord, deleteDailyRecord } = useFarmData();
+  const { records, flocks, mainFlock, addDailyRecord, updateDailyRecord, deleteDailyRecord, isLoading, dbError } = useFarmData();
   const activeBirds = mainFlock?.quantidadeAtual ?? defaultFlockSize;
   const sortedRecords = useMemo(() => [...records].sort((a, b) => b.data.localeCompare(a.data)), [records]);
 
@@ -1150,6 +1249,7 @@ function DailyRecordPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saved, setSaved] = useState<"create" | "update" | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => { saveToStorage(storageKeys.form, form); }, [form]);
@@ -1173,13 +1273,13 @@ function DailyRecordPage() {
     return next;
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextErrors = validate();
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    const data = {
+    const payload = {
       data: form.data,
       lote: form.lote,
       ovosProduzidos: parseNumber(form.ovosProduzidos),
@@ -1192,15 +1292,22 @@ function DailyRecordPage() {
       observacoes: form.observacoes,
     };
 
-    if (editingId !== null) {
-      updateDailyRecord(editingId, data);
-      setSaved("update");
-      setEditingId(null);
-    } else {
-      addDailyRecord(data);
-      setSaved("create");
+    setIsSaving(true);
+    try {
+      if (editingId !== null) {
+        await updateDailyRecord(editingId, payload);
+        setSaved("update");
+        setEditingId(null);
+      } else {
+        await addDailyRecord(payload);
+        setSaved("create");
+      }
+      setForm({ ...initialForm, data: form.data, lote: form.lote });
+    } catch {
+      // error already stored in context dbError — shown in the banner below
+    } finally {
+      setIsSaving(false);
     }
-    setForm({ ...initialForm, data: form.data, lote: form.lote });
   }
 
   function startEdit(record: DailyRecord) {
@@ -1229,11 +1336,34 @@ function DailyRecordPage() {
     setSaved(null);
   }
 
-  function executeDelete() {
+  async function executeDelete() {
     if (confirmDeleteId === null) return;
-    deleteDailyRecord(confirmDeleteId);
-    if (editingId === confirmDeleteId) cancelEdit();
-    setConfirmDeleteId(null);
+    try {
+      await deleteDailyRecord(confirmDeleteId);
+      if (editingId === confirmDeleteId) cancelEdit();
+    } catch {
+      // error already in context dbError
+    } finally {
+      setConfirmDeleteId(null);
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-5 animate-fade-in">
+        <div className="h-80 animate-shimmer rounded-xl" />
+        <section className="divide-y divide-stone-100 rounded-xl border border-stone-200 bg-white">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="p-4">
+              <div className="mb-3 h-4 w-32 animate-shimmer rounded" />
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3].map((j) => <div key={j} className="h-14 animate-shimmer rounded-lg" />)}
+              </div>
+            </div>
+          ))}
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -1247,6 +1377,9 @@ function DailyRecordPage() {
           </p>
         </div>
       )}
+
+      {/* Banner de erro do banco */}
+      {dbError && <DbErrorBanner message={dbError} />}
 
       {/* Formulário */}
       <form ref={formRef} onSubmit={handleSubmit} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
@@ -1292,9 +1425,22 @@ function DailyRecordPage() {
         </div>
 
         <div className="sticky bottom-0 -mx-4 mt-6 border-t border-stone-200 bg-white/95 p-4 backdrop-blur sm:static sm:-mx-6 sm:-mb-6 sm:px-6">
-          <button type="submit" className={`flex h-14 w-full items-center justify-center gap-2 rounded-xl px-5 text-base font-bold text-white shadow-lg transition ${editingId !== null ? "bg-amber-500 hover:bg-amber-600" : "bg-farm-green hover:bg-farm-ink"}`}>
-            <Save className="h-5 w-5" aria-hidden="true" />
-            {editingId !== null ? "Atualizar registro" : "Salvar registro"}
+          <button
+            type="submit"
+            disabled={isSaving}
+            className={`flex h-14 w-full items-center justify-center gap-2 rounded-xl px-5 text-base font-bold text-white shadow-lg transition disabled:cursor-not-allowed disabled:opacity-70 ${editingId !== null ? "bg-amber-500 hover:bg-amber-600" : "bg-farm-green hover:bg-farm-ink"}`}
+          >
+            {isSaving ? (
+              <>
+                <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />
+                Salvando...
+              </>
+            ) : (
+              <>
+                <Save className="h-5 w-5" aria-hidden="true" />
+                {editingId !== null ? "Atualizar registro" : "Salvar registro"}
+              </>
+            )}
           </button>
         </div>
       </form>
@@ -1304,7 +1450,9 @@ function DailyRecordPage() {
         <div className="flex items-center justify-between border-b border-stone-100 px-5 py-4">
           <div>
             <h2 className="font-bold text-farm-ink">Registros lançados</h2>
-            <p className="mt-0.5 text-xs text-stone-400">{records.length} registro{records.length !== 1 ? "s" : ""} neste navegador</p>
+            <p className="mt-0.5 text-xs text-stone-400">
+              {records.length} registro{records.length !== 1 ? "s" : ""} {isDemoMode ? "· armazenado localmente" : "· sincronizado com Supabase"}
+            </p>
           </div>
         </div>
 
@@ -1968,6 +2116,43 @@ function RoleSwitch({
       >
         Empresário
       </button>
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <article className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="h-3 w-20 animate-shimmer rounded" />
+          <div className="h-7 w-28 animate-shimmer rounded" />
+        </div>
+        <div className="h-11 w-11 animate-shimmer rounded-xl" />
+      </div>
+      <div className="mt-4 h-3 w-36 animate-shimmer rounded" />
+    </article>
+  );
+}
+
+function DbErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" aria-hidden="true" />
+        <div>
+          <p className="font-semibold text-red-800">Erro ao carregar dados</p>
+          <p className="mt-0.5 text-sm text-red-600">{message}</p>
+        </div>
+      </div>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="shrink-0 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+        >
+          Tentar novamente
+        </button>
+      )}
     </div>
   );
 }

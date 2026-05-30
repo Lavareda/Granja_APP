@@ -13,7 +13,10 @@ export type AlertStatus = "normal" | "atencao" | "critico";
 export type FlockPhase = "cria" | "recria" | "postura";
 
 export type DailyRecord = {
+  /** Local integer id — stable hash of supabaseId when from Supabase, or Date.now() in demo mode. */
   id: number;
+  /** Supabase UUID — present when the record was loaded from or saved to the database. */
+  supabaseId?: string;
   data: string;
   lote: string;
   ovosProduzidos: number;
