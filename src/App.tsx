@@ -53,7 +53,14 @@ import {
   deleteDailyRecord as deleteDailyRecordDb,
   translateDbError,
 } from "./services/recordsService";
+import {
+  fetchOwnProfile,
+  fetchProfiles,
+  roleForEmail,
+  updateProfileRole,
+} from "./services/profilesService";
 import type {
+  AccessRole,
   Alert,
   AlertStatus,
   DailyRecord,
@@ -65,6 +72,7 @@ import type {
   Page,
   PerformancePoint,
   SeriesPoint,
+  UserProfile,
 } from "./types";
 import {
   calcularFaseLote,
@@ -118,8 +126,6 @@ type EggSaleForm = {
   status: EggSale["status"];
 };
 
-type AccessRole = "manager" | "granjeiro";
-
 type DashboardData = {
   ovosHoje: number;
   posturaHoje: number;
@@ -169,6 +175,12 @@ type AuthContextValue = {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  role: AccessRole;
+  roleLoading: boolean;
+  profiles: UserProfile[];
+  profilesError: string | null;
+  refreshProfiles: () => Promise<void>;
+  updateUserRole: (profile: UserProfile, role: AccessRole) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -244,14 +256,21 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Egg; path: strin
   { page: "reports", label: "Relatórios", icon: FileText, path: "/relatorios" },
   { page: "map", label: "Mapa", icon: Map, path: "/mapa" },
   { page: "settings", label: "Configurações", icon: Settings, path: "/configuracoes" },
+  { page: "permissions", label: "Permissões", icon: Pencil, path: "/permissoes" },
 ];
 
 function isAccessRole(value: unknown): value is AccessRole {
-  return value === "manager" || value === "granjeiro";
+  return value === "empresario" || value === "granjeiro";
+}
+
+function loadStoredRole() {
+  const storedRole = loadFromStorage<unknown>(storageKeys.role, "empresario");
+  if (storedRole === "manager") return "empresario";
+  return isAccessRole(storedRole) ? storedRole : "granjeiro";
 }
 
 function canAccessPage(role: AccessRole, page: Page) {
-  if (role === "manager") return true;
+  if (role === "empresario") return true;
   return page === "records";
 }
 
@@ -379,12 +398,20 @@ function statusLabel(status: AlertStatus) {
   return "Normal";
 }
 
+function roleLabel(role: AccessRole) {
+  return role === "empresario" ? "Empresário" : "Granjeiro";
+}
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 const FarmDataContext = createContext<FarmDataContextValue | null>(null);
 
 function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<AccessRole>("granjeiro");
+  const [roleLoading, setRoleLoading] = useState(false);
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) {
@@ -407,6 +434,54 @@ function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const currentUser = session?.user;
+    if (!supabase || !currentUser) {
+      setRole("granjeiro");
+      setProfiles([]);
+      setRoleLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function loadRole() {
+      setRoleLoading(true);
+      setProfilesError(null);
+      try {
+        const profile = await fetchOwnProfile(currentUser.id, currentUser.email);
+        if (cancelled) return;
+        const nextRole = roleForEmail(currentUser.email, profile.role);
+        setRole(nextRole);
+        if (nextRole === "empresario") {
+          await refreshProfilesInternal();
+        } else {
+          setProfiles([profile]);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setProfilesError(error instanceof Error ? error.message : "Não foi possível carregar o perfil.");
+          setRole(roleForEmail(currentUser.email, "granjeiro"));
+        }
+      } finally {
+        if (!cancelled) setRoleLoading(false);
+      }
+    }
+
+    async function refreshProfilesInternal() {
+      try {
+        const data = await fetchProfiles();
+        if (!cancelled) setProfiles(data);
+      } catch (error) {
+        if (!cancelled) setProfilesError(error instanceof Error ? error.message : "Não foi possível carregar usuários.");
+      }
+    }
+
+    loadRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id, session?.user?.email]);
+
   async function signIn(email: string, password: string) {
     if (!supabase) throw new Error("Configure o Supabase no arquivo .env para entrar.");
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -415,8 +490,13 @@ function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signUp(email: string, password: string) {
     if (!supabase) throw new Error("Configure o Supabase no arquivo .env para criar conta.");
-    const { error } = await supabase.auth.signUp({ email, password });
+    const redirectUrl = `${window.location.origin}/#/login`;
+    const { data, error } = await supabase.auth.signUp(
+      { email, password },
+      { emailRedirectTo: redirectUrl },
+    );
     if (error) throw error;
+    return data;
   }
 
   async function signOut() {
@@ -425,7 +505,48 @@ function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  const value = useMemo(() => ({ user: session?.user ?? null, session, loading, signIn, signUp, signOut }), [session, loading]);
+  async function refreshProfiles() {
+    if (!supabase || role !== "empresario") return;
+    setProfilesError(null);
+    try {
+      setProfiles(await fetchProfiles());
+    } catch (error) {
+      setProfilesError(error instanceof Error ? error.message : "Não foi possível carregar usuários.");
+    }
+  }
+
+  async function updateUserRole(profile: UserProfile, nextRole: AccessRole) {
+    if (!supabase || role !== "empresario") {
+      throw new Error("Somente empresários podem alterar permissões.");
+    }
+    if (profile.id === session?.user?.id && nextRole !== "empresario") {
+      throw new Error("Você não pode remover o próprio acesso de empresário.");
+    }
+    if (profile.isProtected && nextRole !== "empresario") {
+      throw new Error("Este usuário protegido deve permanecer como empresário.");
+    }
+
+    const updated = await updateProfileRole(profile, nextRole);
+    setProfiles((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
+  const value = useMemo(
+    () => ({
+      user: session?.user ?? null,
+      session,
+      loading,
+      role,
+      roleLoading,
+      profiles,
+      profilesError,
+      refreshProfiles,
+      updateUserRole,
+      signIn,
+      signUp,
+      signOut,
+    }),
+    [session, loading, role, roleLoading, profiles, profilesError],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
@@ -438,13 +559,21 @@ function useAuth() {
 function FarmDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  const [records, setRecords] = useState<DailyRecord[]>(() => loadFromStorage(storageKeys.records, demoDailyRecords, isRecordList));
-  const [flocks, setFlocks] = useState<Flock[]>(() => loadFromStorage(storageKeys.flocks, demoFlocks, isFlockList));
-  const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
-    loadFromStorage(storageKeys.finance, demoFinancialRecords, isFinancialList),
+  const [records, setRecords] = useState<DailyRecord[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.records, demoDailyRecords, isRecordList) : [],
   );
-  const [sales, setSales] = useState<EggSale[]>(() => loadFromStorage(storageKeys.sales, demoEggSales, isEggSaleList));
-  const [inventory, setInventory] = useState<InventoryItem[]>(() => loadFromStorage(storageKeys.inventory, demoInventory, isInventoryList));
+  const [flocks, setFlocks] = useState<Flock[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.flocks, demoFlocks, isFlockList) : demoFlocks,
+  );
+  const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.finance, demoFinancialRecords, isFinancialList) : demoFinancialRecords,
+  );
+  const [sales, setSales] = useState<EggSale[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.sales, demoEggSales, isEggSaleList) : demoEggSales,
+  );
+  const [inventory, setInventory] = useState<InventoryItem[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.inventory, demoInventory, isInventoryList) : demoInventory,
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const farmAreas = demoFarmAreas;
@@ -461,11 +590,21 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   }, [user?.id]); // re-fetch when user changes (login / logout)
 
   // Persist to localStorage only in demo mode (Supabase stores the real data).
-  useEffect(() => { if (isDemoMode) saveToStorage(storageKeys.records, records); }, [records]);
-  useEffect(() => saveToStorage(storageKeys.flocks, flocks), [flocks]);
-  useEffect(() => saveToStorage(storageKeys.finance, financialRecords), [financialRecords]);
-  useEffect(() => saveToStorage(storageKeys.sales, sales), [sales]);
-  useEffect(() => saveToStorage(storageKeys.inventory, inventory), [inventory]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.records, records);
+  }, [records]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.flocks, flocks);
+  }, [flocks]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.finance, financialRecords);
+  }, [financialRecords]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.sales, sales);
+  }, [sales]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.inventory, inventory);
+  }, [inventory]);
 
   const sortedRecords = useMemo(() => [...records].sort((a, b) => a.data.localeCompare(b.data)), [records]);
   const latestRecord = sortedRecords[sortedRecords.length - 1];
@@ -684,10 +823,10 @@ function useFarmData() {
 }
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, roleLoading } = useAuth();
   const location = useLocation();
 
-  if (loading) {
+  if (loading || (!isDemoMode && roleLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f7f2] px-4">
         <div className="animate-fade-in text-center">
@@ -739,11 +878,17 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         await signIn(email, password);
         navigate(from, { replace: true });
       } else {
-        await signUp(email, password);
-        setMessage("Conta criada. Verifique seu email se a confirmação estiver ativa no Supabase.");
+        const data = await signUp(email, password);
+        if (data?.session) {
+          setMessage("Conta criada com sucesso. Você já está logado.");
+          navigate(from, { replace: true });
+        } else {
+          setMessage("Conta criada. Verifique seu email para confirmar e retorne ao login.");
+        }
       }
-    } catch {
-      setError("Não foi possível acessar a conta. Confira os dados e tente novamente.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível acessar a conta. Confira os dados e tente novamente.";
+      setError(message);
     } finally {
       setSubmitting(false);
     }
@@ -770,7 +915,6 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
 
         {error ? <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div> : null}
         {message ? <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{message}</div> : null}
-
         <form onSubmit={handleAuthSubmit} className="space-y-4">
           <Field label="Email">
             <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@sitiodobem.com" className="field-input" />
@@ -937,7 +1081,11 @@ function AppFooter() {
   return (
     <footer className="mt-auto border-t border-stone-200 bg-white/60 px-4 py-6 text-center backdrop-blur">
       <p className="text-sm font-semibold text-farm-green">GranjaApp — Plataforma inteligente para gestão avícola</p>
-      <p className="mt-1 text-xs text-stone-400">Versão demonstrativa · Dados simulados para apresentação comercial</p>
+      {isDemoMode ? (
+        <p className="mt-1 text-xs text-stone-400">Versão demonstrativa · Dados simulados para apresentação comercial</p>
+      ) : (
+        <p className="mt-1 text-xs text-stone-400">Dados sincronizados com Supabase para persistência real.</p>
+      )}
     </footer>
   );
 }
@@ -965,18 +1113,23 @@ function App() {
 
 function AppShell() {
   const location = useLocation();
-  const initialPage = pathToPage(location.pathname) ?? loadFromStorage(storageKeys.page, "dashboard", isPage);
-  const [role, setRole] = useState<AccessRole>(() => loadFromStorage(storageKeys.role, "manager", isAccessRole));
+  const initialPage = pathToPage(location.pathname) ?? (isDemoMode ? loadFromStorage(storageKeys.page, "dashboard", isPage) : "dashboard");
+  const [demoRole, setDemoRole] = useState<AccessRole>(loadStoredRole);
+  const { signOut, user, role: authRole } = useAuth();
+  const role = isDemoMode ? demoRole : authRole;
   const [page, setPage] = useState<Page>(() => (canAccessPage(role, initialPage) ? initialPage : "records"));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const { resetAllData } = useFarmData();
-  const { signOut, user } = useAuth();
   const navigate = useNavigate();
   const visibleNavItems = getVisibleNavItems(role);
 
-  useEffect(() => saveToStorage(storageKeys.page, page), [page]);
-  useEffect(() => saveToStorage(storageKeys.role, role), [role]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.page, page);
+  }, [page]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.role, demoRole);
+  }, [demoRole]);
   useEffect(() => {
     const routePage = pathToPage(location.pathname);
     if (routePage && !canAccessPage(role, routePage)) {
@@ -1010,7 +1163,8 @@ function AppShell() {
   }
 
   function changeRole(nextRole: AccessRole) {
-    setRole(nextRole);
+    if (!isDemoMode) return;
+    setDemoRole(nextRole);
     if (!canAccessPage(nextRole, page)) {
       setPage("records");
       navigate(pageToPath("records"), { replace: true });
@@ -1041,7 +1195,9 @@ function AppShell() {
                 <Tractor className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
                 <span className="truncate sm:hidden">GranjaApp</span>
                 <span className="hidden truncate sm:inline">GranjaApp · Sítio do Bem</span>
-                <span className="hidden shrink-0 rounded-full bg-amber-500 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo teste</span>
+                {isDemoMode ? (
+            <span className="hidden shrink-0 rounded-full bg-amber-500 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo teste</span>
+          ) : null}
               </p>
               <h1 className="truncate text-xl font-bold text-farm-ink sm:text-2xl">{pageTitle}</h1>
             </div>
@@ -1049,7 +1205,13 @@ function AppShell() {
           <div className="flex shrink-0 items-center gap-2">
             <NotificationCenter />
             <div className="hidden items-center gap-2 md:flex">
-              <RoleSwitch role={role} onChange={changeRole} />
+              {isDemoMode ? (
+                <RoleSwitch role={role} onChange={changeRole} />
+              ) : (
+                <span className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold capitalize text-stone-600">
+                  {role}
+                </span>
+              )}
               <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email ?? "Usuário demo"}</span>
               <button onClick={handleLogout} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:text-farm-green">
                 Sair
@@ -1057,7 +1219,7 @@ function AppShell() {
             </div>
           </div>
         </div>
-        <nav className={`mx-auto mt-3 hidden max-w-7xl gap-2 md:grid ${role === "manager" ? "grid-cols-8" : "grid-cols-1"}`}>
+        <nav className={`mx-auto mt-3 hidden max-w-7xl gap-2 md:grid ${role === "empresario" ? "grid-cols-9" : "grid-cols-1"}`}>
           {visibleNavItems.map((item) => (
             <TabButton key={item.page} active={page === item.page} icon={item.icon} label={item.label} onClick={() => goToPage(item.page)} />
           ))}
@@ -1070,43 +1232,46 @@ function AppShell() {
         userEmail={user?.email}
         role={role}
         navItems={visibleNavItems}
+        canSwitchRole={isDemoMode}
         onRoleChange={changeRole}
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={goToPage}
         onLogout={handleLogout}
       />
 
-      <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-          <p className="text-xs text-amber-800">
-            ⚠ Ambiente de teste — os dados ficam salvos apenas neste navegador.
-          </p>
-          {showResetConfirm ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-amber-900">Confirmar?</span>
+      {isDemoMode ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+            <p className="text-xs text-amber-800">
+              ⚠ Ambiente de teste — os dados ficam salvos apenas neste navegador.
+            </p>
+            {showResetConfirm ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-amber-900">Confirmar?</span>
+                <button
+                  onClick={handleResetAll}
+                  className="rounded-md bg-red-600 px-3 py-1 text-xs font-bold text-white transition hover:bg-red-700"
+                >
+                  Sim, limpar
+                </button>
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+                >
+                  Cancelar
+                </button>
+              </div>
+            ) : (
               <button
-                onClick={handleResetAll}
-                className="rounded-md bg-red-600 px-3 py-1 text-xs font-bold text-white transition hover:bg-red-700"
+                onClick={() => setShowResetConfirm(true)}
+                className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
               >
-                Sim, limpar
+                Limpar dados de teste
               </button>
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-              >
-                Cancelar
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setShowResetConfirm(true)}
-              className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-            >
-              Limpar dados de teste
-            </button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
         <div key={page} className="animate-fade-in">
@@ -1118,6 +1283,7 @@ function AppShell() {
           {page === "reports" ? <ReportsPage /> : null}
           {page === "map" ? <FarmMapPage /> : null}
           {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} /> : null}
+          {page === "permissions" ? <PermissionsPage /> : null}
         </div>
       </main>
       <AppFooter />
@@ -1243,7 +1409,7 @@ function DailyRecordPage() {
 
   const [form, setForm] = useState<DailyRecordForm>(() => ({
     ...initialForm,
-    ...loadFromStorage(storageKeys.form, initialForm, isDailyRecordForm),
+    ...(isDemoMode ? loadFromStorage(storageKeys.form, initialForm, isDailyRecordForm) : {}),
   }));
   const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1252,7 +1418,9 @@ function DailyRecordPage() {
   const [isSaving, setIsSaving] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
-  useEffect(() => { saveToStorage(storageKeys.form, form); }, [form]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.form, form);
+  }, [form]);
 
   function updateField(field: keyof DailyRecordForm, value: string) {
     setForm((c) => ({ ...c, [field]: value }));
@@ -1780,7 +1948,9 @@ function FinancePage() {
       <section className="rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="border-b border-stone-200 p-5">
           <h2 className="text-lg font-semibold">Vendas de ovos</h2>
-          <p className="mt-1 text-sm text-stone-500">Histórico salvo em localStorage com status financeiro.</p>
+          <p className="mt-1 text-sm text-stone-500">
+            {isDemoMode ? "Histórico salvo em localStorage com status financeiro." : "Dados sincronizados com Supabase e exibidos em tempo real."}
+          </p>
         </div>
         <div className="overflow-x-auto">
           <p className="px-5 pb-1 pt-3 text-xs text-stone-400 md:hidden">← Deslize para ver todas as colunas</p>
@@ -1992,20 +2162,152 @@ function SettingsPage({ role, onRoleChange }: { role: AccessRole; onRoleChange: 
     <div className="space-y-5">
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
         <h2 className="text-lg font-semibold">Perfil de acesso</h2>
-        <p className="mt-1 text-sm text-stone-500">Controle demonstrativo salvo em localStorage. O granjeiro acessa apenas o registro diário; o empresário acessa gestão completa e financeiro.</p>
-        <div className="mt-4 max-w-md">
-          <RoleSwitch role={role} onChange={onRoleChange} />
-        </div>
+        <p className="mt-1 text-sm text-stone-500">
+          {isDemoMode
+            ? "Controle demonstrativo salvo em localStorage. O granjeiro acessa apenas o registro diário; o empresário acessa gestão completa e financeiro."
+            : "Acesso controlado e dados reais sincronizados com Supabase."
+          }
+        </p>
+        {isDemoMode ? (
+          <div className="mt-4 max-w-md">
+            <RoleSwitch role={role} onChange={onRoleChange} />
+          </div>
+        ) : null}
       </section>
 
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
         <h2 className="text-lg font-semibold">Configurações</h2>
-        <p className="mt-1 text-sm text-stone-500">Modo demonstração ativo com persistência em localStorage. Supabase permanece preparado, mas sem novos módulos conectados.</p>
+        <p className="mt-1 text-sm text-stone-500">
+          {isDemoMode
+            ? "Modo demonstração ativo com persistência em localStorage. Supabase permanece preparado, mas sem novos módulos conectados."
+            : "Modo de produção ativo com persistência em Supabase para registros reais."
+          }
+        </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <InfoRow label="Fazenda" value="Sítio do Bem" />
           <InfoRow label="Capacidade" value="4.000 poedeiras" />
-          <InfoRow label="Persistência" value="localStorage" />
+          <InfoRow label="Persistência" value={isDemoMode ? "localStorage" : "Supabase"} />
           <InfoRow label="Idioma" value="Português do Brasil" />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PermissionsPage() {
+  const { role, profiles, profilesError, refreshProfiles, updateUserRole, user } = useAuth();
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const demoProfiles: UserProfile[] = [
+    { id: "demo-admin-1", email: "amazonidalavareda@gmail.com", role: "empresario", isProtected: true },
+    { id: "demo-admin-2", email: "phelipelavareda@hotmail.com", role: "empresario", isProtected: true },
+    { id: "demo-granjeiro-1", email: "granjeiro@sitiodobem.com", role: "granjeiro", isProtected: false },
+  ];
+  const visibleProfiles = isDemoMode ? demoProfiles : profiles;
+
+  useEffect(() => {
+    if (!isDemoMode && role === "empresario") {
+      refreshProfiles();
+    }
+  }, [role]);
+
+  async function handleRoleChange(profile: UserProfile, nextRole: AccessRole) {
+    setMessage("");
+    setError("");
+    if (profile.id === user?.id && nextRole !== "empresario") {
+      setError("Você não pode remover seu próprio acesso de empresário.");
+      return;
+    }
+    if (profile.isProtected && nextRole !== "empresario") {
+      setError("Este email é protegido e deve permanecer como empresário.");
+      return;
+    }
+    if (isDemoMode) {
+      setMessage("Alteração simulada. Em produção, a permissão é salva na tabela profiles.");
+      return;
+    }
+
+    try {
+      setSavingId(profile.id);
+      await updateUserRole(profile, nextRole);
+      setMessage("Permissão atualizada com sucesso.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar a permissão.");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  if (role !== "empresario") {
+    return <EmptyState icon={Pencil} title="Acesso restrito" description="Somente usuários empresários podem gerenciar permissões." />;
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Permissões de usuários</h2>
+            <p className="mt-1 text-sm text-stone-500">Empresários definem quem acessa o menu completo e quem fica restrito aos registros operacionais.</p>
+          </div>
+          {!isDemoMode ? (
+            <button
+              type="button"
+              onClick={refreshProfiles}
+              className="flex h-11 items-center justify-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-600 transition hover:border-farm-green hover:text-farm-green"
+            >
+              Atualizar lista
+            </button>
+          ) : null}
+        </div>
+        {message ? <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{message}</div> : null}
+        {(error || profilesError) ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error || profilesError}</div> : null}
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="bg-stone-50 text-xs uppercase text-stone-500">
+              <tr>
+                <th className="px-4 py-3">Email</th>
+                <th className="px-4 py-3">Perfil atual</th>
+                <th className="px-4 py-3">Alterar perfil</th>
+                <th className="px-4 py-3">Proteção</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {visibleProfiles.map((profile) => {
+                const isSelf = profile.id === user?.id;
+                const locked = Boolean(profile.isProtected) || isSelf;
+                return (
+                  <tr key={profile.id}>
+                    <td className="px-4 py-3 font-semibold">{profile.email || "Email não informado"}</td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${profile.role === "empresario" ? "bg-farm-lime text-farm-green" : "bg-stone-100 text-stone-600"}`}>
+                        {roleLabel(profile.role)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={profile.role}
+                        disabled={savingId === profile.id || locked}
+                        onChange={(event) => handleRoleChange(profile, event.target.value as AccessRole)}
+                        className="table-input max-w-48 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+                      >
+                        <option value="granjeiro">Granjeiro</option>
+                        <option value="empresario">Empresário</option>
+                      </select>
+                    </td>
+                    <td className="px-4 py-3 text-stone-500">
+                      {profile.isProtected ? "Email protegido" : isSelf ? "Seu usuário" : "Editável"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
     </div>
@@ -2018,6 +2320,7 @@ function MobileSidebar({
   userEmail,
   role,
   navItems,
+  canSwitchRole,
   onRoleChange,
   onClose,
   onNavigate,
@@ -2028,6 +2331,7 @@ function MobileSidebar({
   userEmail?: string;
   role: AccessRole;
   navItems: Array<{ page: Page; label: string; icon: typeof Egg; path: string }>;
+  canSwitchRole: boolean;
   onRoleChange: (role: AccessRole) => void;
   onClose: () => void;
   onNavigate: (page: Page) => void;
@@ -2057,9 +2361,16 @@ function MobileSidebar({
           ))}
         </nav>
         <div className="border-t border-white/10 p-4">
-          <div className="mb-3">
-            <RoleSwitch role={role} onChange={onRoleChange} compact />
-          </div>
+          {canSwitchRole ? (
+            <div className="mb-3">
+              <RoleSwitch role={role} onChange={onRoleChange} compact />
+            </div>
+          ) : (
+            <div className="mb-3 rounded-lg bg-white/8 p-3">
+              <p className="text-xs text-white/55">Perfil</p>
+              <p className="truncate text-sm font-semibold capitalize">{role}</p>
+            </div>
+          )}
           <div className="mb-3 rounded-lg bg-white/8 p-3">
             <p className="text-xs text-white/55">Usuário</p>
             <p className="truncate text-sm font-semibold">{userEmail ?? "Conta demo"}</p>
@@ -2111,8 +2422,8 @@ function RoleSwitch({
       </button>
       <button
         type="button"
-        onClick={() => onChange("manager")}
-        className={`h-11 rounded-md px-3 text-sm font-semibold transition ${role === "manager" ? activeClass : inactiveClass}`}
+        onClick={() => onChange("empresario")}
+        className={`h-11 rounded-md px-3 text-sm font-semibold transition ${role === "empresario" ? activeClass : inactiveClass}`}
       >
         Empresário
       </button>
@@ -2132,6 +2443,18 @@ function SkeletonCard() {
       </div>
       <div className="mt-4 h-3 w-36 animate-shimmer rounded" />
     </article>
+  );
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Egg; title: string; description: string }) {
+  return (
+    <section className="rounded-xl border border-stone-200 bg-white p-8 text-center shadow-panel">
+      <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-farm-lime text-farm-green">
+        <Icon className="h-6 w-6" aria-hidden="true" />
+      </span>
+      <h2 className="mt-4 text-lg font-bold text-farm-ink">{title}</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-stone-500">{description}</p>
+    </section>
   );
 }
 

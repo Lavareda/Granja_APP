@@ -58,13 +58,72 @@ $$;
 -- =============================================================================
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
+  email       text unique,
   full_name   text,
   avatar_url  text,
   role        text not null default 'granjeiro'
-                check (role in ('owner','manager','granjeiro')),
+                check (role in ('empresario','granjeiro')),
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists email text unique;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.constraint_column_usage
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and constraint_name = 'profiles_role_check'
+  ) then
+    alter table public.profiles drop constraint profiles_role_check;
+  end if;
+end $$;
+
+update public.profiles
+set role = 'empresario'
+where role in ('owner', 'manager');
+
+alter table public.profiles
+  add constraint profiles_role_check check (role in ('empresario','granjeiro'));
+
+create or replace function public.is_protected_empresario_email(email_value text)
+returns boolean language sql immutable as $$
+  select lower(coalesce(email_value, '')) in (
+    'amazonidalavareda@gmail.com',
+    'phelipelavareda@hotmail.com'
+  );
+$$;
+
+create or replace function public.is_empresario()
+returns boolean language sql stable security definer
+set search_path = public as $$
+  select exists (
+    select 1
+    from public.profiles
+    where id = auth.uid()
+      and role = 'empresario'
+  ) or lower(coalesce(auth.jwt() ->> 'email', '')) in (
+    'amazonidalavareda@gmail.com',
+    'phelipelavareda@hotmail.com'
+  );
+$$;
+
+create or replace function public.enforce_protected_empresario()
+returns trigger language plpgsql as $$
+begin
+  if public.is_protected_empresario_email(new.email) then
+    new.role = 'empresario';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_protected_empresario on public.profiles;
+create trigger enforce_protected_empresario
+  before insert or update on public.profiles
+  for each row execute function public.enforce_protected_empresario();
 
 select public._attach_updated_at_trigger('profiles');
 
@@ -73,8 +132,15 @@ create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer
 set search_path = public as $$
 begin
-  insert into public.profiles (id)
-  values (new.id)
+  insert into public.profiles (id, email, role)
+  values (
+    new.id,
+    lower(new.email),
+    case
+      when public.is_protected_empresario_email(new.email) then 'empresario'
+      else 'granjeiro'
+    end
+  )
   on conflict (id) do nothing;
   return new;
 end;
@@ -87,11 +153,21 @@ create trigger on_auth_user_created
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "Usuário vê próprio perfil" on public.profiles;
+drop policy if exists "Usuário atualiza próprio perfil" on public.profiles;
+drop policy if exists "Empresário vê todos os perfis" on public.profiles;
+drop policy if exists "Empresário atualiza papéis" on public.profiles;
+
 create policy "Usuário vê próprio perfil"
   on public.profiles for select using (auth.uid() = id);
 
-create policy "Usuário atualiza próprio perfil"
-  on public.profiles for update using (auth.uid() = id);
+create policy "Empresário vê todos os perfis"
+  on public.profiles for select using (public.is_empresario());
+
+create policy "Empresário atualiza papéis"
+  on public.profiles for update
+  using (public.is_empresario() and not public.is_protected_empresario_email(email))
+  with check (public.is_empresario() and not public.is_protected_empresario_email(email));
 
 -- =============================================================================
 -- FARMS (Granjas)

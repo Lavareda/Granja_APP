@@ -6,7 +6,18 @@ export type Page =
   | "inventory"
   | "reports"
   | "map"
-  | "settings";
+  | "settings"
+  | "permissions";
+
+export type AccessRole = "empresario" | "granjeiro";
+
+export type UserProfile = {
+  id: string;
+  email: string;
+  role: AccessRole;
+  fullName?: string | null;
+  isProtected?: boolean;
+};
 
 export type AlertStatus = "normal" | "atencao" | "critico";
 
