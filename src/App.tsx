@@ -37,12 +37,7 @@ import {
 } from "lucide-react";
 import {
   defaultFlockSize,
-  demoDailyRecords,
-  demoEggSales,
   demoFarmAreas,
-  demoFinancialRecords,
-  demoFlocks,
-  demoInventory,
   today,
 } from "./data/demoData";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
@@ -53,6 +48,7 @@ import {
   deleteDailyRecord as deleteDailyRecordDb,
   translateDbError,
 } from "./services/recordsService";
+import { fetchEggSales, insertEggSale, resetOperationalData } from "./services/financeService";
 import {
   fetchOwnProfile,
   fetchProfiles,
@@ -163,10 +159,11 @@ type FarmDataContextValue = {
   addDailyRecord: (record: Omit<DailyRecord, "id">) => Promise<void>;
   updateDailyRecord: (id: number, record: Omit<DailyRecord, "id">) => Promise<void>;
   deleteDailyRecord: (id: number) => Promise<void>;
-  resetAllData: () => void;
-  addEggSale: (sale: Omit<EggSale, "id">) => void;
+  resetAllData: () => Promise<void>;
+  addEggSale: (sale: Omit<EggSale, "id" | "supabaseId">) => Promise<void>;
   addFlock: () => void;
   updateFlock: (id: number, field: keyof Flock, value: string) => void;
+  deleteFlock: (id: number) => void;
   updateFinancialRecord: (field: keyof FinancialRecord, value: number | string) => void;
   updateInventoryItem: (id: number, field: keyof InventoryItem, value: string) => void;
 };
@@ -189,11 +186,11 @@ type AuthContextValue = {
 /** Demo mode is active whenever Supabase env variables are not configured. */
 const isDemoMode = !isSupabaseConfigured;
 const storageKeys = {
-  records: "granjaapp.dailyRecords.v2",
-  flocks: "granjaapp.flocks.v1",
-  finance: "granjaapp.finance.v1",
-  sales: "granjaapp.eggSales.v1",
-  inventory: "granjaapp.inventory.v1",
+  records: "granjaapp.dailyRecords.clientTesting.v1",
+  flocks: "granjaapp.flocks.clientTesting.v1",
+  finance: "granjaapp.finance.clientTesting.v1",
+  sales: "granjaapp.eggSales.clientTesting.v1",
+  inventory: "granjaapp.inventory.clientTesting.v1",
   page: "granjaapp.currentPage.v2",
   form: "granjaapp.dailyRecordDraft.v2",
   role: "granjaapp.accessRole.v1",
@@ -222,6 +219,20 @@ const initialSaleForm: EggSaleForm = {
   precoPorCaixa: "327.00",
   formaPagamento: "pix",
   status: "pago",
+};
+
+const emptyFinancialRecord: FinancialRecord = {
+  id: 0,
+  data: today,
+  receitaDiaria: 0,
+  receitaMensal: 0,
+  precoPorDuzia: 0,
+  precoPorCaixa: 0,
+  custoRacao: 0,
+  custoMaoDeObra: 0,
+  energia: 0,
+  medicamentos: 0,
+  outrosCustos: 0,
 };
 
 const numericFields: Array<keyof DailyRecordForm> = [
@@ -560,31 +571,34 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
   const [records, setRecords] = useState<DailyRecord[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.records, demoDailyRecords, isRecordList) : [],
+    isDemoMode ? loadFromStorage(storageKeys.records, [], isRecordList) : [],
   );
   const [flocks, setFlocks] = useState<Flock[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.flocks, demoFlocks, isFlockList) : demoFlocks,
+    isDemoMode ? loadFromStorage(storageKeys.flocks, [], isFlockList) : [],
   );
   const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.finance, demoFinancialRecords, isFinancialList) : demoFinancialRecords,
+    isDemoMode ? loadFromStorage(storageKeys.finance, [], isFinancialList) : [],
   );
   const [sales, setSales] = useState<EggSale[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.sales, demoEggSales, isEggSaleList) : demoEggSales,
+    isDemoMode ? loadFromStorage(storageKeys.sales, [], isEggSaleList) : [],
   );
   const [inventory, setInventory] = useState<InventoryItem[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.inventory, demoInventory, isInventoryList) : demoInventory,
+    isDemoMode ? loadFromStorage(storageKeys.inventory, [], isInventoryList) : [],
   );
   const [isLoading, setIsLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const farmAreas = demoFarmAreas;
 
-  // When Supabase is configured and the user is logged in, fetch records from the DB.
+  // When Supabase is configured and the user is logged in, fetch operational data from the DB.
   useEffect(() => {
     if (!isSupabaseConfigured || !user) return;
     setIsLoading(true);
     setDbError(null);
-    fetchDailyRecords(user.id)
-      .then((data) => setRecords(data))
+    Promise.all([fetchDailyRecords(user.id), fetchEggSales(user.id)])
+      .then(([dailyRecords, eggSales]) => {
+        setRecords(dailyRecords);
+        setSales(eggSales);
+      })
       .catch((err: Error) => setDbError(translateDbError(err.message)))
       .finally(() => setIsLoading(false));
   }, [user?.id]); // re-fetch when user changes (login / logout)
@@ -609,7 +623,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   const sortedRecords = useMemo(() => [...records].sort((a, b) => a.data.localeCompare(b.data)), [records]);
   const latestRecord = sortedRecords[sortedRecords.length - 1];
   const mainFlock = flocks.find((flock) => flock.status !== "encerrado") ?? flocks[0];
-  const latestFinance = financialRecords[financialRecords.length - 1] ?? demoFinancialRecords[0];
+  const latestFinance = financialRecords[financialRecords.length - 1] ?? emptyFinancialRecord;
   const receitaHoje = sales.filter((sale) => sale.dataVenda === today).reduce((sum, sale) => sum + sale.valorTotal, 0);
   const receitaMes = sales
     .filter((sale) => sale.dataVenda.slice(0, 7) === today.slice(0, 7))
@@ -707,19 +721,39 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  function resetAllData() {
-    setRecords(demoDailyRecords);
-    setFlocks(demoFlocks);
-    setFinancialRecords(demoFinancialRecords);
-    setSales(demoEggSales);
-    setInventory(demoInventory);
-    Object.values(storageKeys).forEach((key) => window.localStorage.removeItem(key));
+  async function resetAllData(): Promise<void> {
+    setDbError(null);
+    if (isSupabaseConfigured && user) {
+      try {
+        await resetOperationalData(user.id);
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    }
+    setRecords([]);
+    setFinancialRecords([]);
+    setSales([]);
+    setInventory([]);
+    [storageKeys.records, storageKeys.finance, storageKeys.sales, storageKeys.inventory].forEach((key) => window.localStorage.removeItem(key));
   }
 
-  function addEggSale(sale: Omit<EggSale, "id">) {
-    setSales((current) => [{ ...sale, id: Date.now() }, ...current]);
+  async function addEggSale(sale: Omit<EggSale, "id" | "supabaseId">): Promise<void> {
+    if (isSupabaseConfigured && user) {
+      try {
+        const saved = await insertEggSale(sale, user.id);
+        setSales((current) => [saved, ...current]);
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    } else {
+      setSales((current) => [{ ...sale, id: Date.now() }, ...current]);
+    }
     setFinancialRecords((current) => {
-      const latest = current[current.length - 1] ?? demoFinancialRecords[0];
+      const latest = current[current.length - 1] ?? emptyFinancialRecord;
       return [
         ...current.slice(0, -1),
         {
@@ -764,9 +798,13 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     );
   }
 
+  function deleteFlock(id: number) {
+    setFlocks((current) => current.filter((flock) => flock.id !== id));
+  }
+
   function updateFinancialRecord(field: keyof FinancialRecord, value: number | string) {
     setFinancialRecords((current) => {
-      const latest = current[current.length - 1] ?? demoFinancialRecords[0];
+      const latest = current[current.length - 1] ?? emptyFinancialRecord;
       const next = { ...latest, [field]: field === "data" ? String(value) : Number(value) || 0 };
       return [...current.slice(0, -1), next];
     });
@@ -806,6 +844,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       addEggSale,
       addFlock,
       updateFlock,
+      deleteFlock,
       updateFinancialRecord,
       updateInventoryItem,
     }),
@@ -1120,6 +1159,9 @@ function AppShell() {
   const [page, setPage] = useState<Page>(() => (canAccessPage(role, initialPage) ? initialPage : "records"));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetToken, setResetToken] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [isResetting, setIsResetting] = useState(false);
   const { resetAllData } = useFarmData();
   const navigate = useNavigate();
   const visibleNavItems = getVisibleNavItems(role);
@@ -1171,9 +1213,22 @@ function AppShell() {
     }
   }
 
-  function handleResetAll() {
-    resetAllData();
-    setShowResetConfirm(false);
+  async function handleResetAll() {
+    if (resetToken.trim() !== "ZERAR") {
+      setResetError("Digite ZERAR para confirmar.");
+      return;
+    }
+    setIsResetting(true);
+    setResetError("");
+    try {
+      await resetAllData();
+      setShowResetConfirm(false);
+      setResetToken("");
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "Não foi possível zerar os dados.");
+    } finally {
+      setIsResetting(false);
+    }
   }
 
   const pageTitle = navItems.find((item) => item.page === page)?.label ?? "Painel";
@@ -1219,7 +1274,7 @@ function AppShell() {
             </div>
           </div>
         </div>
-        <nav className={`mx-auto mt-3 hidden max-w-7xl gap-2 md:grid ${role === "empresario" ? "grid-cols-9" : "grid-cols-1"}`}>
+        <nav className="mx-auto mt-3 hidden max-w-7xl flex-wrap gap-2 md:flex">
           {visibleNavItems.map((item) => (
             <TabButton key={item.page} active={page === item.page} icon={item.icon} label={item.label} onClick={() => goToPage(item.page)} />
           ))}
@@ -1239,40 +1294,6 @@ function AppShell() {
         onLogout={handleLogout}
       />
 
-      {isDemoMode ? (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
-          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-            <p className="text-xs text-amber-800">
-              ⚠ Ambiente de teste — os dados ficam salvos apenas neste navegador.
-            </p>
-            {showResetConfirm ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-amber-900">Confirmar?</span>
-                <button
-                  onClick={handleResetAll}
-                  className="rounded-md bg-red-600 px-3 py-1 text-xs font-bold text-white transition hover:bg-red-700"
-                >
-                  Sim, limpar
-                </button>
-                <button
-                  onClick={() => setShowResetConfirm(false)}
-                  className="rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-                >
-                  Cancelar
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowResetConfirm(true)}
-                className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-              >
-                Limpar dados de teste
-              </button>
-            )}
-          </div>
-        </div>
-      ) : null}
-
       <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
         <div key={page} className="animate-fade-in">
           {page === "dashboard" ? <DashboardPage onNewRecord={() => goToPage("records")} /> : null}
@@ -1282,10 +1303,52 @@ function AppShell() {
           {page === "inventory" ? <InventoryPage /> : null}
           {page === "reports" ? <ReportsPage /> : null}
           {page === "map" ? <FarmMapPage /> : null}
-          {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} /> : null}
+          {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} onRequestReset={() => setShowResetConfirm(true)} /> : null}
           {page === "permissions" ? <PermissionsPage /> : null}
         </div>
       </main>
+      {showResetConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-farm-ink/55 px-4 pb-8 backdrop-blur-sm sm:items-center sm:pb-0">
+          <section className="w-full max-w-md animate-fade-in rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-xl font-bold text-farm-ink">Zerar dados de teste?</h2>
+            <p className="mt-2 text-sm leading-6 text-stone-600">
+              Esta ação não pode ser desfeita. Ela remove apenas dados operacionais de teste:
+              registros diários, premissas financeiras, estoque, ocorrências sanitárias e vendas.
+              Usuários, perfis e permissões serão preservados.
+            </p>
+            <Field label="Digite ZERAR para confirmar" error={resetError}>
+              <input
+                value={resetToken}
+                onChange={(event) => {
+                  setResetToken(event.target.value);
+                  setResetError("");
+                }}
+                className="field-input"
+                placeholder="ZERAR"
+              />
+            </Field>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => {
+                  setShowResetConfirm(false);
+                  setResetToken("");
+                  setResetError("");
+                }}
+                className="flex h-12 items-center justify-center rounded-xl border border-stone-200 font-semibold text-stone-600 transition hover:bg-stone-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleResetAll}
+                disabled={isResetting}
+                className="flex h-12 items-center justify-center rounded-xl bg-red-600 font-bold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-stone-300"
+              >
+                {isResetting ? "Zerando..." : "Zerar"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <AppFooter />
     </div>
   );
@@ -1577,7 +1640,7 @@ function DailyRecordPage() {
           </Field>
           <Field label="Lote" error={errors.lote} tooltip="Lote de aves ao qual este registro pertence.">
             <select value={form.lote} onChange={(e) => updateField("lote", e.target.value)} className="field-input">
-              {flocks.map((f) => <option key={f.id}>{f.nome}</option>)}
+              {flocks.length ? flocks.map((f) => <option key={f.id}>{f.nome}</option>) : <option>{form.lote || "Lote principal"}</option>}
             </select>
           </Field>
           <NumberField label="Ovos produzidos" icon={Egg} value={form.ovosProduzidos} error={errors.ovosProduzidos} placeholder="Ex: 3502" onChange={(v) => updateField("ovosProduzidos", v)} tooltip="Total de ovos coletados no dia, sem descontos." />
@@ -1625,7 +1688,10 @@ function DailyRecordPage() {
         </div>
 
         {records.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-stone-400">Nenhum registro ainda. Preencha o formulário acima.</p>
+          <div className="px-5 py-10 text-center">
+            <p className="font-semibold text-farm-ink">Nenhum registro encontrado ainda</p>
+            <p className="mt-1 text-sm text-stone-400">Comece adicionando o primeiro registro diário.</p>
+          </div>
         ) : (
           <>
             {/* Cards — mobile */}
@@ -1742,16 +1808,35 @@ function DailyRecordPage() {
 }
 
 function FlocksPage() {
-  const { flocks, addFlock, updateFlock } = useFarmData();
+  const { flocks, addFlock, updateFlock, deleteFlock } = useFarmData();
+  const [confirmDeleteFlockId, setConfirmDeleteFlockId] = useState<number | null>(null);
+  const flockToDelete = flocks.find((flock) => flock.id === confirmDeleteFlockId);
+
+  function executeDeleteFlock() {
+    if (confirmDeleteFlockId === null) return;
+    deleteFlock(confirmDeleteFlockId);
+    setConfirmDeleteFlockId(null);
+  }
 
   return (
     <div className="space-y-5">
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {flocks.map((flock) => {
+      {flocks.length ? (
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {flocks.map((flock) => {
           const idade = calcularIdadeLoteSemanas(flock.dataAlojamento);
           return (
-            <article key={flock.id} className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-              <p className="text-sm font-semibold text-farm-green">{flock.nome}</p>
+            <article key={flock.id} className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel transition hover:-translate-y-0.5 hover:shadow-lg">
+              <div className="flex items-start justify-between gap-3">
+                <p className="min-w-0 text-sm font-semibold text-farm-green">{flock.nome}</p>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteFlockId(flock.id)}
+                  aria-label={`Excluir ${flock.nome}`}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-stone-200 text-stone-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
               <p className="mt-2 text-2xl font-semibold">{formatNumber(flock.quantidadeAtual)} aves</p>
               <div className="mt-4 grid gap-2 text-sm text-stone-600">
                 <span>{idade} semanas · {calcularFaseLote(idade)}</span>
@@ -1760,8 +1845,11 @@ function FlocksPage() {
               </div>
             </article>
           );
-        })}
-      </section>
+          })}
+        </section>
+      ) : (
+        <EmptyState icon={Layers3} title="Nenhum lote cadastrado" description="Adicione o primeiro lote para calcular idade, fase e produção esperada." />
+      )}
 
       <section className="rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="flex flex-col gap-4 border-b border-stone-200 p-5 sm:flex-row sm:items-start sm:justify-between">
@@ -1780,7 +1868,7 @@ function FlocksPage() {
         </div>
         <div className="overflow-x-auto">
           <p className="px-5 pb-1 pt-3 text-xs text-stone-400 md:hidden">← Deslize para ver todas as colunas</p>
-          <table className="w-full min-w-[1060px] text-left text-sm">
+          <table className="w-full min-w-[1140px] text-left text-sm">
             <thead className="bg-stone-50 text-xs uppercase text-stone-500">
               <tr>
                 <th className="px-4 py-3">Nome do lote</th>
@@ -1793,6 +1881,7 @@ function FlocksPage() {
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Produção esperada</th>
                 <th className="px-4 py-3">Mortalidade</th>
+                <th className="px-4 py-3">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
@@ -1816,6 +1905,16 @@ function FlocksPage() {
                     </td>
                     <td className="px-4 py-3">{formatPercent(producaoEsperadaPorIdade(idade))}</td>
                     <td className="px-4 py-3">{formatPercent(calcularMortalidade(flock))}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteFlockId(flock.id)}
+                        aria-label={`Excluir ${flock.nome}`}
+                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 text-stone-500 transition hover:border-red-300 hover:text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -1823,6 +1922,43 @@ function FlocksPage() {
           </table>
         </div>
       </section>
+
+      {confirmDeleteFlockId !== null && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-farm-ink/50 px-4 pb-8 backdrop-blur-sm sm:items-center sm:pb-0">
+          <div className="w-full max-w-md animate-fade-in rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                <Trash2 className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="text-lg font-bold text-farm-ink">Excluir lote?</h3>
+                <p className="mt-2 text-sm text-stone-500">
+                  {flockToDelete
+                    ? `Você está prestes a excluir ${flockToDelete.nome}.`
+                    : "Você está prestes a excluir este lote."}{" "}
+                  Esta ação remove apenas o cadastro do lote e não apaga registros diários já lançados.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteFlockId(null)}
+                className="flex h-12 items-center justify-center rounded-xl border border-stone-200 font-semibold text-stone-600 transition hover:bg-stone-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={executeDeleteFlock}
+                className="flex h-12 items-center justify-center rounded-xl bg-red-600 font-bold text-white transition hover:bg-red-700"
+              >
+                Excluir lote
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2025,8 +2161,9 @@ function InventoryPage() {
         </section>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {inventory.map((item) => (
+      {inventory.length ? (
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {inventory.map((item) => (
           <article key={item.id} className={`rounded-lg border p-5 shadow-panel ${statusClasses(item.status)}`}>
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -2047,25 +2184,121 @@ function InventoryPage() {
               </label>
             </div>
           </article>
-        ))}
-      </section>
+          ))}
+        </section>
+      ) : (
+        <EmptyState icon={Package} title="Nenhum item de estoque cadastrado" description="Cadastre itens de estoque para acompanhar níveis mínimos e alertas." />
+      )}
     </div>
   );
 }
 
 function ReportsPage() {
-  const { records, latestFinance, dashboard } = useFarmData();
-  const sortedRecords = useMemo(() => [...records].sort((a, b) => b.data.localeCompare(a.data)), [records]);
-  const weeklyEggs = records.slice(-7).reduce((sum, record) => sum + record.ovosProduzidos, 0);
-  const monthlyEggs = records.reduce((sum, record) => sum + record.ovosProduzidos, 0);
-  const cards = [
-    ["Receita", formatCurrency(latestFinance.receitaDiaria), "Resumo diário"],
-    ["Custo", formatCurrency(latestFinance.receitaDiaria - dashboard.lucroHoje), "Resumo diário"],
-    ["Lucro", formatCurrency(dashboard.lucroHoje), "Resumo diário"],
-    ["Ovos", formatNumber(dashboard.ovosHoje), "Resumo diário"],
-    ["Mortalidade", formatNumber(dashboard.mortalidadeHoje), "Resumo diário"],
-    ["Ração", `${formatNumber(dashboard.racaoHoje)} kg`, "Resumo diário"],
-  ];
+  const { records, sales, latestFinance, mainFlock } = useFarmData();
+  const { role } = useAuth();
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const [week, setWeek] = useState("");
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [lot, setLot] = useState("todos");
+  const lots = Array.from(new Set(records.map((record) => record.lote))).sort();
+  const activeBirds = mainFlock?.quantidadeAtual ?? defaultFlockSize;
+
+  function getWeekRange(value: string) {
+    if (!value) return null;
+    const [year, weekNumber] = value.split("-W").map(Number);
+    const janFourth = new Date(year, 0, 4);
+    const day = janFourth.getDay() || 7;
+    const start = new Date(janFourth);
+    start.setDate(janFourth.getDate() - day + 1 + (weekNumber - 1) * 7);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  }
+
+  function getMonthRange(value: string) {
+    const [year, monthNumber] = value.split("-").map(Number);
+    const start = new Date(year, monthNumber - 1, 1);
+    const end = new Date(year, monthNumber, 0);
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  }
+
+  function filterRecords(start: string, end: string) {
+    return records.filter((record) => record.data >= start && record.data <= end && (lot === "todos" || record.lote === lot));
+  }
+
+  function filterSales(start: string, end: string) {
+    return sales.filter((sale) => sale.dataVenda >= start && sale.dataVenda <= end);
+  }
+
+  function buildReport(title: string, start: string, end: string) {
+    const periodRecords = filterRecords(start, end);
+    const periodSales = filterSales(start, end);
+    const days = Math.max(1, new Set(periodRecords.map((record) => record.data)).size);
+    const totalOvos = periodRecords.reduce((sum, record) => sum + record.ovosProduzidos, 0);
+    const ovosQuebrados = periodRecords.reduce((sum, record) => sum + record.ovosQuebrados, 0);
+    const descarteTotal = periodRecords.reduce((sum, record) => sum + record.descarte, 0);
+    const racaoConsumida = periodRecords.reduce((sum, record) => sum + record.racaoKg, 0);
+    const aguaConsumida = periodRecords.reduce((sum, record) => sum + record.agua, 0);
+    const temperaturaMedia = periodRecords.length
+      ? periodRecords.reduce((sum, record) => sum + record.temperatura, 0) / periodRecords.length
+      : 0;
+    const receitaTotal = periodSales.reduce((sum, sale) => sum + sale.valorTotal, 0);
+    const custoDiario = latestFinance.custoRacao + latestFinance.custoMaoDeObra + latestFinance.energia + latestFinance.medicamentos + latestFinance.outrosCustos;
+    const custoTotal = custoDiario * days;
+    return {
+      title,
+      start,
+      end,
+      totalOvos,
+      ovosQuebrados,
+      ovosComercializaveis: totalOvos - ovosQuebrados - descarteTotal,
+      mortalidadeTotal: periodRecords.reduce((sum, record) => sum + record.mortalidade, 0),
+      descarteTotal,
+      racaoConsumida,
+      aguaConsumida,
+      temperaturaMedia,
+      posturaMedia: periodRecords.length ? (totalOvos / (activeBirds * days)) * 100 : 0,
+      racaoPorDuzia: calcularRacaoPorDuzia(racaoConsumida, totalOvos),
+      receitaTotal,
+      custoTotal,
+      lucroEstimado: receitaTotal - custoTotal,
+      recordCount: periodRecords.length,
+    };
+  }
+
+  const weekRange = getWeekRange(week) ?? (() => {
+    const end = new Date(`${today}T00:00:00`);
+    const start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    return { start: start.toISOString().slice(0, 10), end: today };
+  })();
+  const monthRange = getMonthRange(month);
+  const customRange = dateStart && dateEnd ? { start: dateStart, end: dateEnd } : monthRange;
+  const weeklyReport = buildReport("Relatório semanal", weekRange.start, weekRange.end);
+  const monthlyReport = buildReport("Relatório mensal", monthRange.start, monthRange.end);
+  const filteredReport = buildReport("Período filtrado", customRange.start, customRange.end);
+
+  function reportToCsv(report: ReturnType<typeof buildReport>) {
+    const rows = [
+      ["Métrica", "Valor"],
+      ["Período", `${report.start} a ${report.end}`],
+      ["Total de ovos produzidos", report.totalOvos],
+      ["Ovos quebrados", report.ovosQuebrados],
+      ["Ovos comercializáveis", report.ovosComercializaveis],
+      ["Mortalidade total", report.mortalidadeTotal],
+      ["Descarte total", report.descarteTotal],
+      ["Ração consumida kg", report.racaoConsumida],
+      ["Água consumida L", report.aguaConsumida],
+      ["Média de temperatura °C", formatNumber(report.temperaturaMedia, 1)],
+      ["Postura média %", formatPercent(report.posturaMedia)],
+      ["Ração por dúzia kg", formatNumber(report.racaoPorDuzia, 2)],
+      ["Receita total", report.receitaTotal],
+      ["Custo total", report.custoTotal],
+      ["Lucro estimado", report.lucroEstimado],
+    ];
+    return rows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
+  }
 
   return (
     <div className="space-y-5">
@@ -2073,12 +2306,65 @@ function ReportsPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold">Relatórios</h2>
-            <p className="mt-1 text-sm text-stone-500">Resumo diário, semanal e mensal com exportação CSV local.</p>
+            <p className="mt-1 text-sm text-stone-500">Filtre por período, semana, mês e lote para acompanhar a operação.</p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <button onClick={() => exportCsv(`granjaapp-relatorio-${today}.csv`, buildRecordsCsv(sortedRecords))} className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink">
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Field label="Data inicial">
+            <input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} className="field-input" />
+          </Field>
+          <Field label="Data final">
+            <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} className="field-input" />
+          </Field>
+          <Field label="Semana">
+            <input type="week" value={week} onChange={(event) => setWeek(event.target.value)} className="field-input" />
+          </Field>
+          <Field label="Mês">
+            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="field-input" />
+          </Field>
+          <Field label="Lote" className="xl:col-span-2">
+            <select value={lot} onChange={(event) => setLot(event.target.value)} className="field-input">
+              <option value="todos">Todos os lotes</option>
+              {lots.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </Field>
+        </div>
+      </section>
+
+      {records.length === 0 ? (
+        <EmptyState icon={FileText} title="Nenhum registro encontrado ainda" description="Comece adicionando o primeiro registro diário para gerar relatórios semanais e mensais." />
+      ) : null}
+
+      <section className="grid gap-5 xl:grid-cols-3">
+        <DetailedReportCard report={filteredReport} />
+        <DetailedReportCard report={weeklyReport} />
+        <DetailedReportCard report={monthlyReport} />
+      </section>
+
+      <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Exportação</h2>
+            <p className="mt-1 text-sm text-stone-500">
+              {role === "empresario" ? "Exportações disponíveis para usuários empresários." : "Somente usuários empresários podem exportar relatórios."}
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <button
+              disabled={role !== "empresario"}
+              onClick={() => exportCsv(`granjaapp-relatorio-semanal-${today}.csv`, reportToCsv(weeklyReport))}
+              className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink disabled:cursor-not-allowed disabled:bg-stone-300"
+            >
               <Download className="h-5 w-5" aria-hidden="true" />
-              Exportar CSV
+              Exportar CSV semanal
+            </button>
+            <button
+              disabled={role !== "empresario"}
+              onClick={() => exportCsv(`granjaapp-relatorio-mensal-${today}.csv`, reportToCsv(monthlyReport))}
+              className="flex h-12 items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink disabled:cursor-not-allowed disabled:bg-stone-300"
+            >
+              <Download className="h-5 w-5" aria-hidden="true" />
+              Exportar CSV mensal
             </button>
             <button disabled className="flex h-12 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-100 px-4 font-semibold text-stone-500">
               <FileText className="h-5 w-5" aria-hidden="true" />
@@ -2086,18 +2372,6 @@ function ReportsPage() {
             </button>
           </div>
         </div>
-      </section>
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {cards.map(([label, value, detail]) => (
-          <StatCard key={label} icon={FileText} label={label} value={value} detail={detail} />
-        ))}
-      </section>
-
-      <section className="grid gap-5 lg:grid-cols-3">
-        <ReportSummary title="Resumo diário" ovos={dashboard.ovosHoje} racao={dashboard.racaoHoje} lucro={dashboard.lucroHoje} />
-        <ReportSummary title="Resumo semanal" ovos={weeklyEggs} racao={records.slice(-7).reduce((sum, record) => sum + record.racaoKg, 0)} lucro={dashboard.lucroHoje * 7} />
-        <ReportSummary title="Resumo mensal" ovos={monthlyEggs} racao={records.reduce((sum, record) => sum + record.racaoKg, 0)} lucro={dashboard.lucroHoje * 30} />
       </section>
     </div>
   );
@@ -2157,7 +2431,15 @@ function FarmMapPage() {
   );
 }
 
-function SettingsPage({ role, onRoleChange }: { role: AccessRole; onRoleChange: (role: AccessRole) => void }) {
+function SettingsPage({
+  role,
+  onRoleChange,
+  onRequestReset,
+}: {
+  role: AccessRole;
+  onRoleChange: (role: AccessRole) => void;
+  onRequestReset: () => void;
+}) {
   return (
     <div className="space-y-5">
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
@@ -2190,6 +2472,22 @@ function SettingsPage({ role, onRoleChange }: { role: AccessRole; onRoleChange: 
           <InfoRow label="Idioma" value="Português do Brasil" />
         </div>
       </section>
+
+      {role === "empresario" ? (
+        <section className="rounded-lg border border-red-200 bg-white p-5 shadow-panel">
+          <h2 className="text-lg font-semibold text-red-700">Dados de teste</h2>
+          <p className="mt-1 text-sm text-stone-500">
+            Zere somente dados operacionais de teste. Usuários, perfis e permissões serão preservados.
+          </p>
+          <button
+            type="button"
+            onClick={onRequestReset}
+            className="mt-4 flex h-12 items-center justify-center rounded-lg bg-red-600 px-4 font-semibold text-white transition hover:bg-red-700"
+          >
+            Zerar dados de teste
+          </button>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -2625,14 +2923,48 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReportSummary({ title, ovos, racao, lucro }: { title: string; ovos: number; racao: number; lucro: number }) {
+function DetailedReportCard({
+  report,
+}: {
+  report: {
+    title: string;
+    start: string;
+    end: string;
+    totalOvos: number;
+    ovosQuebrados: number;
+    ovosComercializaveis: number;
+    mortalidadeTotal: number;
+    descarteTotal: number;
+    racaoConsumida: number;
+    aguaConsumida: number;
+    temperaturaMedia: number;
+    posturaMedia: number;
+    racaoPorDuzia: number;
+    receitaTotal: number;
+    custoTotal: number;
+    lucroEstimado: number;
+    recordCount: number;
+  };
+}) {
   return (
     <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <h2 className="text-lg font-semibold">{report.title}</h2>
+      <p className="mt-1 text-sm text-stone-500">{report.start} a {report.end}</p>
       <div className="mt-4 grid gap-3">
-        <InfoRow label="Ovos" value={formatNumber(ovos)} />
-        <InfoRow label="Ração" value={`${formatNumber(racao)} kg`} />
-        <InfoRow label="Lucro" value={formatCurrency(lucro)} />
+        <InfoRow label="Registros" value={formatNumber(report.recordCount)} />
+        <InfoRow label="Total de ovos produzidos" value={formatNumber(report.totalOvos)} />
+        <InfoRow label="Ovos quebrados" value={formatNumber(report.ovosQuebrados)} />
+        <InfoRow label="Ovos comercializáveis" value={formatNumber(report.ovosComercializaveis)} />
+        <InfoRow label="Mortalidade total" value={formatNumber(report.mortalidadeTotal)} />
+        <InfoRow label="Descarte total" value={formatNumber(report.descarteTotal)} />
+        <InfoRow label="Ração consumida" value={`${formatNumber(report.racaoConsumida, 1)} kg`} />
+        <InfoRow label="Água consumida" value={`${formatNumber(report.aguaConsumida, 1)} L`} />
+        <InfoRow label="Média de temperatura" value={`${formatNumber(report.temperaturaMedia, 1)} °C`} />
+        <InfoRow label="Postura média %" value={formatPercent(report.posturaMedia)} />
+        <InfoRow label="Ração por dúzia" value={`${formatNumber(report.racaoPorDuzia, 2)} kg`} />
+        <InfoRow label="Receita total" value={formatCurrency(report.receitaTotal)} />
+        <InfoRow label="Custo total" value={formatCurrency(report.custoTotal)} />
+        <InfoRow label="Lucro estimado" value={formatCurrency(report.lucroEstimado)} />
       </div>
     </section>
   );
@@ -2642,7 +2974,7 @@ function TabButton({ active, icon: Icon, label, onClick }: { active: boolean; ic
   return (
     <button
       onClick={onClick}
-      className={`flex h-11 items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition-all duration-150 ${
+      className={`flex h-11 min-w-[116px] flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition-all duration-150 ${
         active
           ? "bg-farm-green text-white shadow-sm"
           : "border border-stone-200 bg-white text-stone-500 hover:border-farm-green/50 hover:bg-farm-lime/40 hover:text-farm-green"

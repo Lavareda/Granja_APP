@@ -66,6 +66,7 @@ export type FinancialRecord = {
 
 export type EggSale = {
   id: number;
+  supabaseId?: string;
   dataVenda: string;
   cliente: string;
   quantidadeDuzias: number;
