@@ -49,3 +49,16 @@ export async function upsertVaccine(
   if (error) throw new Error(error.message);
   return data;
 }
+
+export async function deleteVaccine(flockId: string, userId: string, name: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase não configurado.");
+
+  const { error } = await supabase
+    .from("flock_vaccines")
+    .delete()
+    .eq("flock_id", flockId)
+    .eq("user_id", userId)
+    .eq("name", name);
+
+  if (error) throw new Error(error.message);
+}

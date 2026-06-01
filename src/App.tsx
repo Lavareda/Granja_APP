@@ -48,9 +48,11 @@ import {
   deleteDailyRecord as deleteDailyRecordDb,
   translateDbError,
 } from "./services/recordsService";
-import { fetchVaccines as fetchVaccinesDb, upsertVaccine as upsertVaccineDb } from "./services/vaccineService";
+import { fetchVaccines as fetchVaccinesDb, upsertVaccine as upsertVaccineDb, deleteVaccine as deleteVaccineDb } from "./services/vaccineService";
+import { fetchFlocks as fetchFlocksDb, insertFlock as insertFlockDb, updateFlock as updateFlockDb, deleteFlock as deleteFlockDb } from "./services/flocksService";
 import { fetchActiveAlerts, fetchAllAlerts, snoozeAlert as snoozeAlertDb, resolveAlert as resolveAlertDb } from "./services/alertsService";
 import { fetchEggSales, insertEggSale, resetOperationalData } from "./services/financeService";
+import { fetchInventoryItems, upsertInventoryItems } from "./services/inventoryService";
 import {
   ensureOwnProfile,
   fetchOwnProfile,
@@ -172,6 +174,7 @@ type FarmDataContextValue = {
   deleteFlock: (id: number) => void;
   updateFinancialRecord: (field: keyof FinancialRecord, value: number | string) => void;
   updateInventoryItem: (id: number, field: keyof InventoryItem, value: string) => void;
+  saveInventoryItems: (items: InventoryItem[]) => Promise<void>;
   fetchVaccinesForFlock?: (flockId: number) => Promise<void>;
   addOrUpdateVaccine?: (flockId: number, vaccine: Omit<Vaccine, "id">) => Promise<void>;
   deleteVaccine?: (flockId: number, vaccineName: string) => Promise<void>;
@@ -711,45 +714,65 @@ function useAuth() {
 function FarmDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  const [records, setRecords] = useState<DailyRecord[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.records, [], isRecordList) : [],
-  );
-  const [flocks, setFlocks] = useState<Flock[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.flocks, [], isFlockList) : [],
-  );
+  // All farm data starts empty — Supabase is the source of truth.
+  // The useEffect below fetches real data once the user is authenticated.
+  const [records, setRecords] = useState<DailyRecord[]>([]);
+  const [flocks, setFlocks] = useState<Flock[]>([]);
+  // Financial records have no Supabase table — persist to localStorage only.
   const [financialRecords, setFinancialRecords] = useState<FinancialRecord[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.finance, [], isFinancialList) : [],
+    loadFromStorage(storageKeys.finance, [], isFinancialList),
   );
-  const [sales, setSales] = useState<EggSale[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.sales, [], isEggSaleList) : [],
-  );
-  const [inventory, setInventory] = useState<InventoryItem[]>(() =>
-    isDemoMode ? normalizeInventory(loadFromStorage(storageKeys.inventory, [], isInventoryList)) : normalizeInventory([]),
-  );
-  const [vaccines, setVaccines] = useState<Vaccine[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.vaccines, [], (v: any) => Array.isArray(v)) : [],
-  );
+  const [sales, setSales] = useState<EggSale[]>([]);
+  // Inventory starts empty; the useEffect seeds defaults if none exist in Supabase.
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [vaccines, setVaccines] = useState<Vaccine[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const farmAreas = demoFarmAreas;
 
-  // When Supabase is configured and the user is logged in, fetch operational data from the DB.
+  // Always-current ref to flocks — lets debounced Supabase saves read latest state.
+  const flocksRef = useRef<Flock[]>([]);
+  useEffect(() => { flocksRef.current = flocks; }, [flocks]);
+  // Debounce timers for per-flock field edits (keyed by local flock id).
+  const flockUpdateTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  // When Supabase is configured and the user is logged in, fetch all operational data from the DB.
   useEffect(() => {
     if (!isSupabaseConfigured || !user) return;
     setIsLoading(true);
     setDbError(null);
-    Promise.all([fetchDailyRecords(user.id), fetchEggSales(user.id)])
-      .then(async ([dailyRecords, eggSales]) => {
+    Promise.all([
+      fetchDailyRecords(user.id),
+      fetchEggSales(user.id),
+      fetchInventoryItems(user.id),
+      fetchFlocksDb(user.id),
+    ])
+      .then(async ([dailyRecords, eggSales, inventoryItems, loadedFlocks]) => {
         setRecords(dailyRecords);
         setSales(eggSales);
+        setFlocks(loadedFlocks);
+
+        // Seed the six default catalog items for this user if the inventory is empty.
+        let finalInventory = inventoryItems;
+        if (inventoryItems.length === 0) {
+          try {
+            finalInventory = await upsertInventoryItems(user.id, normalizeInventory([]));
+          } catch (err) {
+            console.error("Inventory seed failed:", err);
+          }
+        }
+        setInventory(normalizeInventory(finalInventory));
+
+        // Fetch vaccines for each flock using the stable Supabase UUID as flock_id.
         try {
           const vaccinesByFlock = await Promise.all(
-            (flocks || []).map(async (flock) => {
+            loadedFlocks.map(async (flock) => {
+              if (!flock.supabaseId) return { flockId: flock.id, vaccines: [] as Vaccine[] };
               try {
-                const v = await fetchVaccinesDb(String(flock.id), user.id);
+                const v = await fetchVaccinesDb(flock.supabaseId, user.id);
                 return { flockId: flock.id, vaccines: v };
               } catch {
-                return { flockId: flock.id, vaccines: [] };
+                return { flockId: flock.id, vaccines: [] as Vaccine[] };
               }
             }),
           );
@@ -764,25 +787,10 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false));
   }, [user?.id]); // re-fetch when user changes (login / logout)
 
-  // Persist to localStorage only in demo mode (Supabase stores the real data).
+  // Financial records have no Supabase table — persist to localStorage so they survive refresh.
   useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.records, records);
-  }, [records]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.flocks, flocks);
-  }, [flocks]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.finance, financialRecords);
+    saveToStorage(storageKeys.finance, financialRecords);
   }, [financialRecords]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.sales, sales);
-  }, [sales]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.inventory, inventory);
-  }, [inventory]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.vaccines, vaccines);
-  }, [vaccines]);
 
   const sortedRecords = useMemo(() => [...records].sort((a, b) => a.data.localeCompare(b.data)), [records]);
   const latestRecord = sortedRecords[sortedRecords.length - 1];
@@ -931,22 +939,29 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  function addFlock() {
-    setFlocks((current) => {
-      const nextNumber = current.length + 1;
-      return [
-        ...current,
-        {
-          id: Date.now(),
-          nome: `Novo lote ${nextNumber}`,
-          dataAlojamento: today,
-          linhagem: "Hy-Line Brown",
-          quantidadeInicial: 1000,
-          quantidadeAtual: 1000,
-          status: "ativo",
-        },
-      ];
-    });
+  async function addFlock() {
+    const tempId = Date.now();
+    const nextNumber = flocks.length + 1;
+    const newFlock: Flock = {
+      id: tempId,
+      nome: `Novo lote ${nextNumber}`,
+      dataAlojamento: today,
+      linhagem: "Hy-Line Brown",
+      quantidadeInicial: 1000,
+      quantidadeAtual: 1000,
+      status: "ativo",
+    };
+    setFlocks((current) => [...current, newFlock]);
+    if (isSupabaseConfigured && user) {
+      try {
+        const saved = await insertFlockDb(user.id, newFlock);
+        // Attach the real supabaseId so future updates and deletes can find this row.
+        setFlocks((current) => current.map((f) => (f.id === tempId ? { ...f, supabaseId: saved.supabaseId } : f)));
+      } catch (err) {
+        console.error("Flock insert failed:", err);
+        setDbError(translateDbError(err instanceof Error ? err.message : ""));
+      }
+    }
   }
 
   function updateFlock(id: number, field: keyof Flock, value: string) {
@@ -960,9 +975,34 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
         };
       }),
     );
+    if (isSupabaseConfigured && user) {
+      const existing = flocks.find((f) => f.id === id);
+      if (!existing?.supabaseId) return;
+      const prev = flockUpdateTimers.current.get(id);
+      if (prev) clearTimeout(prev);
+      flockUpdateTimers.current.set(id, setTimeout(() => {
+        const latest = flocksRef.current.find((f) => f.id === id);
+        if (!latest?.supabaseId) return;
+        updateFlockDb(latest.supabaseId, user.id, latest).catch((err) =>
+          console.error("Flock update failed:", err)
+        );
+      }, 800));
+    }
   }
 
-  function deleteFlock(id: number) {
+  async function deleteFlock(id: number) {
+    if (isSupabaseConfigured && user) {
+      const existing = flocks.find((f) => f.id === id);
+      if (existing?.supabaseId) {
+        try {
+          await deleteFlockDb(existing.supabaseId, user.id);
+        } catch (err) {
+          console.error("Flock delete failed:", err);
+          setDbError(translateDbError(err instanceof Error ? err.message : ""));
+          return; // Don't remove locally if the DB delete failed
+        }
+      }
+    }
     setFlocks((current) => current.filter((flock) => flock.id !== id));
   }
 
@@ -987,14 +1027,41 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  async function fetchVaccinesForFlock(flockId: number) {
+  async function saveInventoryItems(items: InventoryItem[]) {
+    setDbError(null);
     if (isSupabaseConfigured && user) {
       try {
-        const v = await fetchVaccinesDb(String(flockId), user.id);
+        const saved = await upsertInventoryItems(user.id, items);
+        const savedMap = new Map(saved.map((s) => [s.nome.toLowerCase(), s]));
+        setInventory((current) =>
+          normalizeInventory(current.map((existing) => savedMap.get(existing.nome.toLowerCase()) ?? existing)),
+        );
+        return;
+      } catch (err) {
+        console.error("[saveInventoryItems] Supabase error:", err);
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    }
+    // Demo / offline fallback — update local state only.
+    const updatedMap = new Map(items.map((i) => [i.nome.toLowerCase(), i]));
+    setInventory((current) =>
+      normalizeInventory(current.map((existing) => updatedMap.get(existing.nome.toLowerCase()) ?? existing)),
+    );
+  }
+
+  async function fetchVaccinesForFlock(flockId: number) {
+    if (isSupabaseConfigured && user) {
+      // Use the stable Supabase UUID — the local integer id is not stored in flock_vaccines.
+      const supabaseFlockId = flocksRef.current.find((f) => f.id === flockId)?.supabaseId;
+      if (!supabaseFlockId) return [] as Vaccine[];
+      try {
+        const v = await fetchVaccinesDb(supabaseFlockId, user.id);
         setFlocks((current) => current.map((f) => (f.id === flockId ? { ...f, vaccines: v } : f)));
         return v;
       } catch (err) {
-        // ignore
+        console.error("Fetch vaccines failed:", err);
         return [] as Vaccine[];
       }
     }
@@ -1003,9 +1070,13 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
 
   async function addOrUpdateVaccine(flockId: number, vaccine: Omit<Vaccine, "id">) {
     if (isSupabaseConfigured && user) {
+      const supabaseFlockId = flocksRef.current.find((f) => f.id === flockId)?.supabaseId;
+      if (!supabaseFlockId) {
+        console.error("Flock has no supabaseId — cannot save vaccine to Supabase.");
+        return;
+      }
       try {
-        await upsertVaccineDb(String(flockId), user.id, vaccine);
-        // refresh vaccines for this flock
+        await upsertVaccineDb(supabaseFlockId, user.id, vaccine);
         await fetchVaccinesForFlock(flockId);
         return;
       } catch (err) {
@@ -1033,16 +1104,17 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
 
   async function deleteVaccine(flockId: number, vaccineName: string) {
     if (isSupabaseConfigured && user) {
-      try {
-        // best-effort: find and nullify date_applied by name via upsert with dateApplied null? For now leave as no-op if no API.
-        // Supabase deletion endpoint not implemented in vaccineService; skip.
-        await fetchVaccinesForFlock(flockId);
-        return;
-      } catch (err) {
-        const msg = translateDbError(err instanceof Error ? err.message : "");
-        setDbError(msg);
-        throw new Error(msg);
+      const supabaseFlockId = flocksRef.current.find((f) => f.id === flockId)?.supabaseId;
+      if (supabaseFlockId) {
+        try {
+          await deleteVaccineDb(supabaseFlockId, user.id, vaccineName);
+        } catch (err) {
+          console.error("Vaccine delete failed:", err);
+          // Non-fatal: fall through to refresh local list
+        }
       }
+      await fetchVaccinesForFlock(flockId);
+      return;
     }
     setFlocks((current) => current.map((f) => (f.id !== flockId ? f : { ...f, vaccines: (f.vaccines ?? []).filter((v) => v.name !== vaccineName) })));
   }
@@ -1071,6 +1143,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       deleteFlock,
       updateFinancialRecord,
       updateInventoryItem,
+      saveInventoryItems,
       fetchVaccinesForFlock,
       addOrUpdateVaccine,
       deleteVaccine,
@@ -1106,7 +1179,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
     );
   }
 
-  if (isDemoMode) return <>{children}</>;
+
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
   return <>{children}</>;
 }
@@ -1172,11 +1245,6 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
           </div>
         </div>
 
-        {isDemoMode || !isSupabaseConfigured ? (
-          <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-            Modo demonstração ativo. O app pode ser acessado sem login para apresentação.
-          </div>
-        ) : null}
 
         {error ? <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div> : null}
         {message ? <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{message}</div> : null}
@@ -1556,10 +1624,10 @@ function App() {
 
 function AppShell() {
   const location = useLocation();
-  const initialPage = pathToPage(location.pathname) ?? (isDemoMode ? loadFromStorage(storageKeys.page, "dashboard", isPage) : "dashboard");
+  const initialPage = pathToPage(location.pathname) ?? "dashboard";
   const [demoRole, setDemoRole] = useState<AccessRole>(loadStoredRole);
   const { signOut, user, role: authRole } = useAuth();
-  const role = isDemoMode ? demoRole : authRole;
+  const role = authRole;
   const [page, setPage] = useState<Page>(() => (canAccessPage(role, initialPage) ? initialPage : "records"));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -1572,12 +1640,6 @@ function AppShell() {
   const visibleNavItems = getVisibleNavItems(role);
   const onboardingKey = `${storageKeys.onboarding}.${user?.id ?? user?.email ?? "demo"}`;
 
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.page, page);
-  }, [page]);
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.role, demoRole);
-  }, [demoRole]);
   useEffect(() => {
     if (!window.localStorage.getItem(onboardingKey)) {
       setShowWelcome(true);
@@ -1667,9 +1729,6 @@ function AppShell() {
                 <Tractor className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden="true" />
                 <span className="truncate sm:hidden">GranjaApp</span>
                 <span className="hidden truncate sm:inline">GranjaApp · Sítio do Bem</span>
-                {isDemoMode ? (
-            <span className="hidden shrink-0 rounded-full bg-amber-500 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white sm:inline">Modo teste</span>
-          ) : null}
               </p>
               <h1 className="truncate text-xl font-bold text-farm-ink sm:text-2xl">{pageTitle}</h1>
             </div>
@@ -1677,14 +1736,10 @@ function AppShell() {
           <div className="flex shrink-0 items-center gap-2">
             <NotificationCenter />
             <div className="hidden items-center gap-2 md:flex">
-              {isDemoMode ? (
-                <RoleSwitch role={role} onChange={changeRole} />
-              ) : (
-                <span className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold capitalize text-stone-600">
-                  {role}
-                </span>
-              )}
-              <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email ?? "Usuário demo"}</span>
+              <span className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold capitalize text-stone-600">
+                {role}
+              </span>
+              <span className="rounded-lg bg-farm-lime px-3 py-2 text-sm font-semibold text-farm-green">{user?.email}</span>
               <button onClick={handleLogout} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:text-farm-green">
                 Sair
               </button>
@@ -1704,7 +1759,7 @@ function AppShell() {
         userEmail={user?.email}
         role={role}
         navItems={visibleNavItems}
-        canSwitchRole={isDemoMode}
+        canSwitchRole={false}
         onRoleChange={changeRole}
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={goToPage}
@@ -1811,7 +1866,7 @@ function DashboardPage({ onNewRecord }: { onNewRecord: () => void }) {
         <div>
           <h2 className="text-xl font-bold text-farm-ink">Resumo operacional</h2>
           <p className="mt-1 text-sm text-stone-400">
-            {records.length} registro{records.length !== 1 ? "s" : ""} · {isDemoMode ? "dados de demonstração" : "sincronizado com Supabase"}
+            {records.length} registro{records.length !== 1 ? "s" : ""} · sincronizado com Supabase
           </p>
         </div>
         <button onClick={onNewRecord} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-farm-green px-4 font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink sm:w-auto">
@@ -1897,7 +1952,6 @@ function DailyRecordPage() {
 
   const [form, setForm] = useState<DailyRecordForm>(() => ({
     ...initialForm,
-    ...(isDemoMode ? loadFromStorage(storageKeys.form, initialForm, isDailyRecordForm) : {}),
   }));
   const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1906,9 +1960,6 @@ function DailyRecordPage() {
   const [isSaving, setIsSaving] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
-  useEffect(() => {
-    if (isDemoMode) saveToStorage(storageKeys.form, form);
-  }, [form]);
 
   function updateField(field: keyof DailyRecordForm, value: string) {
     setForm((c) => ({ ...c, [field]: value }));
@@ -2107,7 +2158,7 @@ function DailyRecordPage() {
           <div>
             <h2 className="font-bold text-farm-ink">Registros lançados</h2>
             <p className="mt-0.5 text-xs text-stone-400">
-              {records.length} registro{records.length !== 1 ? "s" : ""} {isDemoMode ? "· armazenado localmente" : "· sincronizado com Supabase"}
+              {records.length} registro{records.length !== 1 ? "s" : ""} · sincronizado com Supabase
             </p>
           </div>
         </div>
@@ -2510,7 +2561,7 @@ function FinancePage() {
         <div className="border-b border-stone-200 p-5">
           <h2 className="text-lg font-semibold">Vendas de ovos</h2>
           <p className="mt-1 text-sm text-stone-500">
-            {isDemoMode ? "Histórico salvo em localStorage com status financeiro." : "Dados sincronizados com Supabase e exibidos em tempo real."}
+            Dados sincronizados com Supabase e exibidos em tempo real.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -2573,17 +2624,194 @@ function FinancePage() {
   );
 }
 
+type InventoryDraftEntry = { quantidadeAtual: string; estoqueMinimo: string; unidade: string };
+
 function InventoryPage() {
-  const { inventory, updateInventoryItem } = useFarmData();
+  const { inventory, saveInventoryItems } = useFarmData();
+
+  // Ref so async performAutoSave always reads the latest inventory without stale closure.
+  const inventoryRef = useRef(inventory);
+  useEffect(() => { inventoryRef.current = inventory; }, [inventory]);
+
+  // Keyed by item.nome — stable across Supabase id changes (catalog ids 1-6 become UUID-derived after first save).
+  const [draftInventory, setDraftInventory] = useState<Record<string, InventoryDraftEntry>>({});
+  const [saveStatus, setSaveStatus] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // "Adicionar entrada" fields — keyed by nome
+  const [entradaValues, setEntradaValues] = useState<Record<string, string>>({});
+  // Movement history per item — kept in memory only (up to 3 per item)
+  const [movimentos, setMovimentos] = useState<Record<string, string[]>>({});
+
+  // Only initialize draft entries for names that don't already have one.
+  // Never reset existing entries — that would clobber in-progress edits and kill the "Salvo" display.
+  useEffect(() => {
+    const names = new Set(inventory.map((i) => i.nome));
+    setDraftInventory((current) => {
+      let next = current;
+      for (const item of inventory) {
+        if (!(item.nome in next)) {
+          if (next === current) next = { ...current };
+          next[item.nome] = {
+            quantidadeAtual: String(item.quantidadeAtual),
+            estoqueMinimo: String(item.estoqueMinimo),
+            unidade: item.unidade,
+          };
+        }
+      }
+      for (const nome of Object.keys(next)) {
+        if (!names.has(nome)) {
+          if (next === current) next = { ...current };
+          delete next[nome];
+        }
+      }
+      return next;
+    });
+    setSaveStatus((current) => {
+      let next = current;
+      for (const item of inventory) {
+        if (!(item.nome in next)) {
+          if (next === current) next = { ...current };
+          next[item.nome] = "idle";
+        }
+      }
+      for (const nome of Object.keys(next)) {
+        if (!names.has(nome)) {
+          if (next === current) next = { ...current };
+          delete next[nome];
+        }
+      }
+      return next;
+    });
+  }, [inventory]);
+
   const lowStock = inventory.filter((item) => item.status !== "normal");
   const needsInitialStock = inventory.length > 0 && inventory.every((item) => item.quantidadeAtual <= 0);
+
+  async function performAutoSave(nome: string, draftValues: InventoryDraftEntry) {
+    const item = inventoryRef.current.find((i) => i.nome === nome);
+    if (!item) return;
+
+    const quantidadeAtual = Number(draftValues.quantidadeAtual.trim() || "0");
+    const estoqueMinimo = Number(draftValues.estoqueMinimo.trim() || "0");
+    const unidade = draftValues.unidade.trim();
+
+    if (!Number.isFinite(quantidadeAtual) || quantidadeAtual < 0) return;
+    if (!Number.isFinite(estoqueMinimo) || estoqueMinimo < 0) return;
+    if (!unidade) return;
+
+    setSaveStatus((current) => ({ ...current, [nome]: "saving" }));
+
+    try {
+      const next: InventoryItem = {
+        ...item,
+        quantidadeAtual,
+        estoqueMinimo,
+        unidade,
+        status: calcularStatusEstoque({ quantidadeAtual, estoqueMinimo }),
+      };
+      await saveInventoryItems([next]);
+      setSaveStatus((current) => ({ ...current, [nome]: "saved" }));
+      setTimeout(() => {
+        setSaveStatus((current) => ({ ...current, [nome]: "idle" }));
+      }, 2000);
+    } catch (err) {
+      console.error("[performAutoSave] Inventory save failed for", nome, ":", err);
+      setSaveStatus((current) => ({ ...current, [nome]: "error" }));
+      setTimeout(() => {
+        setSaveStatus((current) => ({ ...current, [nome]: "idle" }));
+      }, 3000);
+    }
+  }
+
+  function scheduleAutoSave(nome: string, entry: InventoryDraftEntry) {
+    if (debounceTimers.current[nome]) clearTimeout(debounceTimers.current[nome]);
+    debounceTimers.current[nome] = setTimeout(() => performAutoSave(nome, entry), 700);
+  }
+
+  function handleDraftChange(nome: string, field: keyof InventoryDraftEntry, value: string) {
+    const updatedValue = field === "unidade" ? value : value === "" ? "" : value.replace(/^0+(?=\d)/, "");
+    setDraftInventory((current) => {
+      const next = {
+        ...current,
+        [nome]: { ...(current[nome] ?? { quantidadeAtual: "0", estoqueMinimo: "0", unidade: "" }), [field]: updatedValue },
+      };
+      scheduleAutoSave(nome, next[nome]);
+      return next;
+    });
+  }
+
+  function handleFieldFocus(nome: string, field: "quantidadeAtual" | "estoqueMinimo") {
+    setDraftInventory((current) => {
+      const entry = current[nome];
+      if (entry?.[field] === "0") {
+        return { ...current, [nome]: { ...entry, [field]: "" } };
+      }
+      return current;
+    });
+  }
+
+  function handleFieldBlur(nome: string, field: "quantidadeAtual" | "estoqueMinimo") {
+    setDraftInventory((current) => {
+      const entry = current[nome];
+      if (entry?.[field] === "") {
+        const next = { ...current, [nome]: { ...entry, [field]: "0" } };
+        scheduleAutoSave(nome, next[nome]);
+        return next;
+      }
+      return current;
+    });
+  }
+
+  function handleAddStock(nome: string) {
+    const entradaStr = (entradaValues[nome] ?? "").trim();
+    const entrada = Number(entradaStr);
+    if (!entradaStr || !Number.isFinite(entrada) || entrada <= 0) return;
+
+    const currentDraft = draftInventory[nome];
+    if (!currentDraft) return;
+
+    const currentQty = Number(currentDraft.quantidadeAtual || "0");
+    const newQty = currentQty + entrada;
+    const newDraft: InventoryDraftEntry = { ...currentDraft, quantidadeAtual: String(newQty) };
+
+    // Cancel any pending debounce so it won't overwrite with stale values.
+    if (debounceTimers.current[nome]) clearTimeout(debounceTimers.current[nome]);
+
+    setDraftInventory((current) => ({ ...current, [nome]: newDraft }));
+    setEntradaValues((current) => ({ ...current, [nome]: "" }));
+    setMovimentos((current) => {
+      const entry = `Entrada: +${formatNumber(entrada)} ${currentDraft.unidade}`;
+      return { ...current, [nome]: [entry, ...(current[nome] ?? [])].slice(0, 3) };
+    });
+
+    // Immediate save — user explicitly confirmed, no debounce needed.
+    performAutoSave(nome, newDraft);
+  }
+
+  function getSaveStatusDisplay(status: string) {
+    if (status === "saving") return "Salvando...";
+    if (status === "saved") return "Salvo";
+    if (status === "error") return "Erro ao salvar";
+    return "";
+  }
+
+  function getSaveStatusColor(status: string) {
+    if (status === "saving") return "text-amber-500";
+    if (status === "saved") return "text-emerald-600";
+    if (status === "error") return "text-red-600";
+    return "text-stone-400";
+  }
+
+  useEffect(() => {
+    return () => { Object.values(debounceTimers.current).forEach(clearTimeout); };
+  }, []);
 
   return (
     <div className="space-y-5">
       {needsInitialStock ? (
         <section className="rounded-lg border border-stone-200 bg-white p-5 text-farm-ink shadow-panel">
           <h2 className="text-lg font-semibold">Estoque inicial</h2>
-          <p className="mt-1 text-sm text-stone-500">Cadastre as quantidades iniciais do estoque</p>
+          <p className="mt-1 text-sm text-stone-500">Edite as quantidades no seu estoque — as mudanças serão salvas automaticamente.</p>
         </section>
       ) : lowStock.length ? (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-amber-900">
@@ -2594,28 +2822,127 @@ function InventoryPage() {
 
       {inventory.length ? (
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {inventory.map((item) => (
-          <article key={item.id} className={`rounded-lg border p-5 shadow-panel ${inventoryCardClasses(item)}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">{item.nome}</p>
-                <p className="mt-2 text-3xl font-semibold">{formatNumber(item.quantidadeAtual)} {item.unidade}</p>
-              </div>
-              <Package className="h-6 w-6" aria-hidden="true" />
-            </div>
-            <p className="mt-3 text-sm font-medium">Mínimo: {formatNumber(item.estoqueMinimo)} {item.unidade} · {inventoryStatusLabel(item)}</p>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Atual</span>
-                <input className="table-input bg-white/70" type="number" value={item.quantidadeAtual} onChange={(event) => updateInventoryItem(item.id, "quantidadeAtual", event.target.value)} aria-label={`Quantidade de ${item.nome}`} />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Mínimo</span>
-                <input className="table-input bg-white/70" type="number" value={item.estoqueMinimo} onChange={(event) => updateInventoryItem(item.id, "estoqueMinimo", event.target.value)} aria-label={`Mínimo de ${item.nome}`} />
-              </label>
-            </div>
-          </article>
-          ))}
+          {inventory.map((item) => {
+            const draft = draftInventory[item.nome] ?? {
+              quantidadeAtual: String(item.quantidadeAtual),
+              estoqueMinimo: String(item.estoqueMinimo),
+              unidade: item.unidade,
+            };
+
+            // Single source of truth: derive all display values from the draft so
+            // the big number, the input, and the status badge are always in sync.
+            const draftQty = Number(draft.quantidadeAtual) || 0;
+            const draftMin = Number(draft.estoqueMinimo) || 0;
+            const draftUnit = draft.unidade || item.unidade;
+            const draftStatus = calcularStatusEstoque({ quantidadeAtual: draftQty, estoqueMinimo: draftMin });
+            const displayItem: InventoryItem = { ...item, quantidadeAtual: draftQty, estoqueMinimo: draftMin, unidade: draftUnit, status: draftStatus };
+
+            const saveStatusKey = saveStatus[item.nome] ?? "idle";
+            const statusDisplay = getSaveStatusDisplay(saveStatusKey);
+            const statusColor = getSaveStatusColor(saveStatusKey);
+            const entradaStr = entradaValues[item.nome] ?? "";
+            const entradaQty = Number(entradaStr);
+            const entradaValid = entradaStr !== "" && Number.isFinite(entradaQty) && entradaQty > 0;
+            // Preview uses draftQty so it stays consistent with the current input value.
+            const previewQty = entradaValid ? draftQty + entradaQty : null;
+            const itemMovimentos = movimentos[item.nome] ?? [];
+            return (
+              <article key={item.nome} className={`rounded-lg border p-5 shadow-panel ${inventoryCardClasses(displayItem)}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold">{item.nome}</p>
+                    <p className="mt-2 text-3xl font-semibold">{formatNumber(draftQty)} {draftUnit}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <Package className="h-6 w-6" aria-hidden="true" />
+                    {statusDisplay && <p className={`text-[11px] font-semibold ${statusColor}`}>{statusDisplay}</p>}
+                  </div>
+                </div>
+                <p className="mt-3 text-sm font-medium">Mínimo: {formatNumber(draftMin)} {draftUnit} · {inventoryStatusLabel(displayItem)}</p>
+
+                {/* Entry section */}
+                <div className="mt-4 rounded-md border border-current/10 bg-white/40 p-3">
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest opacity-60">Adicionar entrada</p>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      className="table-input min-w-0 flex-1 bg-white/70"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={entradaStr}
+                      placeholder="Quantidade"
+                      onChange={(event) => setEntradaValues((current) => ({ ...current, [item.nome]: event.target.value.replace(/^0+(?=\d)/, "") }))}
+                      onKeyDown={(event) => { if (event.key === "Enter") handleAddStock(item.nome); }}
+                      aria-label={`Adicionar ao estoque de ${item.nome}`}
+                    />
+                    <button
+                      type="button"
+                      disabled={!entradaValid}
+                      onClick={() => handleAddStock(item.nome)}
+                      className="flex items-center gap-1.5 rounded-lg bg-farm-green px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-farm-ink disabled:cursor-not-allowed disabled:bg-stone-300"
+                    >
+                      <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
+                      Adicionar ao estoque
+                    </button>
+                  </div>
+                  {previewQty !== null && (
+                    <p className="mt-2 text-xs font-semibold text-farm-green">
+                      Novo estoque: {formatNumber(previewQty)} {draftUnit}
+                    </p>
+                  )}
+                  {itemMovimentos.length > 0 && (
+                    <ul className="mt-2 space-y-0.5">
+                      {itemMovimentos.map((m, idx) => (
+                        <li key={idx} className="text-[11px] opacity-70">{m}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* Manual adjustment section */}
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Ajustar estoque atual</span>
+                    <input
+                      className="table-input bg-white/70"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={draft.quantidadeAtual}
+                      onFocus={() => handleFieldFocus(item.nome, "quantidadeAtual")}
+                      onBlur={() => handleFieldBlur(item.nome, "quantidadeAtual")}
+                      onChange={(event) => handleDraftChange(item.nome, "quantidadeAtual", event.target.value)}
+                      aria-label={`Ajustar quantidade de ${item.nome}`}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Mínimo</span>
+                    <input
+                      className="table-input bg-white/70"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={draft.estoqueMinimo}
+                      onFocus={() => handleFieldFocus(item.nome, "estoqueMinimo")}
+                      onBlur={() => handleFieldBlur(item.nome, "estoqueMinimo")}
+                      onChange={(event) => handleDraftChange(item.nome, "estoqueMinimo", event.target.value)}
+                      aria-label={`Mínimo de ${item.nome}`}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Unidade</span>
+                    <input
+                      className="table-input bg-white/70"
+                      type="text"
+                      value={draft.unidade}
+                      onChange={(event) => handleDraftChange(item.nome, "unidade", event.target.value)}
+                      aria-label={`Unidade de ${item.nome}`}
+                    />
+                  </label>
+                </div>
+              </article>
+            );
+          })}
         </section>
       ) : (
         <EmptyState icon={Package} title="Nenhum item de estoque cadastrado" description="Cadastre itens de estoque para acompanhar níveis mínimos e alertas." />
@@ -3024,30 +3351,19 @@ function SettingsPage({
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
         <h2 className="text-lg font-semibold">Perfil de acesso</h2>
         <p className="mt-1 text-sm text-stone-500">
-          {isDemoMode
-            ? "Controle demonstrativo salvo em localStorage. O granjeiro acessa apenas o registro diário; o empresário acessa gestão completa e financeiro."
-            : "Acesso controlado e dados reais sincronizados com Supabase."
-          }
+          Acesso controlado e dados reais sincronizados com Supabase.
         </p>
-        {isDemoMode ? (
-          <div className="mt-4 max-w-md">
-            <RoleSwitch role={role} onChange={onRoleChange} />
-          </div>
-        ) : null}
       </section>
 
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
         <h2 className="text-lg font-semibold">Configurações</h2>
         <p className="mt-1 text-sm text-stone-500">
-          {isDemoMode
-            ? "Modo demonstração ativo com persistência em localStorage. Supabase permanece preparado, mas sem novos módulos conectados."
-            : "Modo de produção ativo com persistência em Supabase para registros reais."
-          }
+          Modo de produção ativo com persistência em Supabase para registros reais.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <InfoRow label="Fazenda" value="Sítio do Bem" />
           <InfoRow label="Capacidade" value="4.000 poedeiras" />
-          <InfoRow label="Persistência" value={isDemoMode ? "localStorage" : "Supabase"} />
+          <InfoRow label="Persistência" value="Supabase" />
           <InfoRow label="Idioma" value="Português do Brasil" />
         </div>
       </section>
@@ -3081,7 +3397,7 @@ function PermissionsPage() {
 
   // Track successful Supabase profile load — used for the success banner.
   useEffect(() => {
-    if (!isDemoMode && profiles.length > 0 && !profilesError) {
+    if (profiles.length > 0 && !profilesError) {
       setProfilesLoadedOk(true);
     }
   }, [profiles.length, profilesError]);
@@ -3091,13 +3407,7 @@ function PermissionsPage() {
     if (profilesError) console.error("PermissionsPage profilesError:", profilesError);
   }, [profilesError]);
 
-  const demoProfiles: UserProfile[] = [
-    { id: "demo-admin-1", email: "amazonidalavareda@gmail.com", role: "empresario", isProtected: true },
-    { id: "demo-admin-2", email: "phelipelavareda@hotmail.com", role: "empresario", isProtected: true },
-    { id: "demo-granjeiro-1", email: "granjeiro@sitiodobem.com", role: "granjeiro", isProtected: false },
-  ];
   const visibleProfiles = useMemo(() => {
-    if (isDemoMode) return demoProfiles;
     const profileMap = new globalThis.Map<string, UserProfile>();
     profiles.forEach((profile) => {
       profileMap.set(profile.id, {
@@ -3128,7 +3438,7 @@ function PermissionsPage() {
   }, [profiles, user?.id, user?.email, role]);
 
   useEffect(() => {
-    if (!isDemoMode && role === "empresario") {
+    if (role === "empresario") {
       refreshProfiles();
     }
   }, [role]);
@@ -3153,12 +3463,6 @@ function PermissionsPage() {
       setMessage("Nenhuma alteração pendente para este usuário.");
       return;
     }
-    if (isDemoMode) {
-      setPendingRoles((current) => ({ ...current, [profile.id]: nextRole }));
-      setMessage("Permissão atualizada no modo demonstração.");
-      return;
-    }
-
     try {
       setSavingId(profile.id);
       await updateUserRole(profile, nextRole);
@@ -3187,15 +3491,13 @@ function PermissionsPage() {
             <h2 className="text-lg font-semibold">Permissões de usuários</h2>
             <p className="mt-1 text-sm text-stone-500">Empresários definem quem acessa o menu completo e quem fica restrito aos registros operacionais.</p>
           </div>
-          {!isDemoMode ? (
-            <button
-              type="button"
-              onClick={refreshProfiles}
-              className="flex h-11 items-center justify-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-600 transition hover:border-farm-green hover:text-farm-green"
-            >
-              Atualizar lista
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={refreshProfiles}
+            className="flex h-11 items-center justify-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-600 transition hover:border-farm-green hover:text-farm-green"
+          >
+            Atualizar lista
+          </button>
         </div>
         {/* Success: profiles loaded from Supabase without errors */}
         {profilesLoadedOk && !message && !error ? (

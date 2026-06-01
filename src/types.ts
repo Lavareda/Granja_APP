@@ -43,6 +43,8 @@ export type DailyRecord = {
 
 export type Flock = {
   id: number;
+  /** Supabase UUID — present once the flock has been saved to the database. */
+  supabaseId?: string;
   nome: string;
   dataAlojamento: string;
   linhagem: string;
@@ -93,6 +95,7 @@ export type EggSale = {
 
 export type InventoryItem = {
   id: number;
+  supabaseId?: string;
   nome: string;
   quantidadeAtual: number;
   unidade: string;
