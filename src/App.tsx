@@ -20,7 +20,7 @@ import {
   Info,
   Layers3,
   LogOut,
-  Map,
+  Map as MapIcon,
   Menu,
   NotebookPen,
   Package,
@@ -50,8 +50,10 @@ import {
 } from "./services/recordsService";
 import { fetchEggSales, insertEggSale, resetOperationalData } from "./services/financeService";
 import {
+  ensureOwnProfile,
   fetchOwnProfile,
   fetchProfiles,
+  protectedEmpresarioEmails,
   roleForEmail,
   updateProfileRole,
 } from "./services/profilesService";
@@ -178,8 +180,8 @@ type AuthContextValue = {
   profilesError: string | null;
   refreshProfiles: () => Promise<void>;
   updateUserRole: (profile: UserProfile, role: AccessRole) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<Session | null>;
+  signUp: (email: string, password: string) => Promise<Session | null>;
   signOut: () => Promise<void>;
 };
 
@@ -235,6 +237,28 @@ const emptyFinancialRecord: FinancialRecord = {
   outrosCustos: 0,
 };
 
+const inventoryCatalog: Omit<InventoryItem, "status">[] = [
+  { id: 1, nome: "Ração", quantidadeAtual: 0, unidade: "kg", estoqueMinimo: 3200 },
+  { id: 2, nome: "Medicamentos", quantidadeAtual: 0, unidade: "kits", estoqueMinimo: 12 },
+  { id: 3, nome: "Vacinas", quantidadeAtual: 0, unidade: "doses", estoqueMinimo: 12 },
+  { id: 4, nome: "Bandejas", quantidadeAtual: 0, unidade: "un.", estoqueMinimo: 600 },
+  { id: 5, nome: "Caixas", quantidadeAtual: 0, unidade: "un.", estoqueMinimo: 90 },
+  { id: 6, nome: "Material de limpeza", quantidadeAtual: 0, unidade: "itens", estoqueMinimo: 18 },
+];
+
+function withInventoryStatus(item: Omit<InventoryItem, "status"> | InventoryItem): InventoryItem {
+  return { ...item, status: calcularStatusEstoque(item) };
+}
+
+function normalizeInventory(items: InventoryItem[]): InventoryItem[] {
+  const existingByName = new Map(items.map((item) => [item.nome.toLowerCase(), item]));
+  const catalogItems = inventoryCatalog.map((baseItem) => withInventoryStatus(existingByName.get(baseItem.nome.toLowerCase()) ?? baseItem));
+  const customItems = items
+    .filter((item) => !inventoryCatalog.some((baseItem) => baseItem.nome.toLowerCase() === item.nome.toLowerCase()))
+    .map(withInventoryStatus);
+  return [...catalogItems, ...customItems];
+}
+
 const numericFields: Array<keyof DailyRecordForm> = [
   "ovosProduzidos",
   "ovosQuebrados",
@@ -265,7 +289,8 @@ const navItems: Array<{ page: Page; label: string; icon: typeof Egg; path: strin
   { page: "finance", label: "Financeiro", icon: BadgeDollarSign, path: "/financeiro" },
   { page: "inventory", label: "Estoque", icon: Package, path: "/estoque" },
   { page: "reports", label: "Relatórios", icon: FileText, path: "/relatorios" },
-  { page: "map", label: "Mapa", icon: Map, path: "/mapa" },
+  { page: "tutorials", label: "Tutoriais", icon: Sparkles, path: "/tutoriais" },
+  { page: "map", label: "Mapa", icon: MapIcon, path: "/mapa" },
   { page: "settings", label: "Configurações", icon: Settings, path: "/configuracoes" },
   { page: "permissions", label: "Permissões", icon: Pencil, path: "/permissoes" },
 ];
@@ -282,7 +307,7 @@ function loadStoredRole() {
 
 function canAccessPage(role: AccessRole, page: Page) {
   if (role === "empresario") return true;
-  return page === "records";
+  return page === "records" || page === "tutorials";
 }
 
 function getVisibleNavItems(role: AccessRole) {
@@ -397,10 +422,50 @@ function exportCsv(filename: string, csv: string) {
   URL.revokeObjectURL(url);
 }
 
+function exportPdf(title: string, rows: Array<[string, string | number]>) {
+  const win = window.open("", "_blank", "noopener,noreferrer");
+  if (!win) {
+    window.print();
+    return;
+  }
+  const content = rows
+    .map(([label, value]) => `<tr><th>${label}</th><td>${String(value)}</td></tr>`)
+    .join("");
+  win.document.write(`
+    <!doctype html>
+    <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>${title}</title>
+        <style>
+          body { font-family: Arial, sans-serif; color: #17211b; margin: 32px; }
+          h1 { color: #2f6f4f; margin-bottom: 8px; }
+          p { color: #78716c; margin-top: 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+          th, td { border: 1px solid #e7e5e4; padding: 10px 12px; text-align: left; }
+          th { background: #f6f7f2; width: 45%; }
+        </style>
+      </head>
+      <body>
+        <h1>${title}</h1>
+        <p>GranjaApp - relatório para teste do cliente</p>
+        <table>${content}</table>
+        <script>window.onload = () => window.print();</script>
+      </body>
+    </html>
+  `);
+  win.document.close();
+}
+
 function statusClasses(status: AlertStatus) {
   if (status === "critico") return "border-red-200 bg-red-50 text-red-800";
   if (status === "atencao") return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-emerald-200 bg-emerald-50 text-emerald-800";
+}
+
+function inventoryCardClasses(item: InventoryItem) {
+  if (item.quantidadeAtual <= 0) return "border-stone-200 bg-white text-farm-ink";
+  return statusClasses(item.status);
 }
 
 function statusLabel(status: AlertStatus) {
@@ -409,8 +474,26 @@ function statusLabel(status: AlertStatus) {
   return "Normal";
 }
 
+function inventoryStatusLabel(item: InventoryItem) {
+  return item.quantidadeAtual <= 0 ? "A cadastrar" : statusLabel(item.status);
+}
+
 function roleLabel(role: AccessRole) {
   return role === "empresario" ? "Empresário" : "Granjeiro";
+}
+
+function authFriendlyError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("invalid login credentials") || message.includes("invalid credentials")) {
+    return "Email ou senha incorretos. Confira os dados e tente novamente.";
+  }
+  if (message.includes("email not confirmed")) {
+    return "Confirme seu email antes de entrar.";
+  }
+  if (message.includes("network") || message.includes("fetch")) {
+    return "Erro de conexão. Verifique sua internet e tente novamente.";
+  }
+  return "Não foi possível acessar a conta. Confira os dados e tente novamente.";
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -430,16 +513,55 @@ function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
-
+    // onAuthStateChange is the SINGLE source of truth for auth state.
+    // Never call setSession(null) except on explicit SIGNED_OUT.
+    // loadInitialSession() was removed — INITIAL_SESSION handles it.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setLoading(false);
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      console.log(`AUTH: ${event}`, nextSession ? "session present" : "no session");
+
+      if (event === "INITIAL_SESSION") {
+        // Fires synchronously on subscription setup with whatever is in storage.
+        // setSession to current state (may be null = no stored session = show login).
+        setSession(nextSession ?? null);
+        if (nextSession?.user) {
+          console.log("AUTH: session found");
+          // Fire-and-forget profile load. Errors MUST NOT clear the session.
+          ensureOwnProfile(nextSession.user.id, nextSession.user.email)
+            .then(() => console.log("PROFILE: loaded"))
+            .catch((err) => console.log("PROFILE: error but keeping session", String(err)));
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (event === "SIGNED_IN") {
+        console.log("AUTH: signed in");
+        if (nextSession) setSession(nextSession);
+        if (nextSession?.user) {
+          // Fire-and-forget. Errors MUST NOT clear the session.
+          ensureOwnProfile(nextSession.user.id, nextSession.user.email)
+            .then(() => console.log("PROFILE: loaded"))
+            .catch((err) => console.log("PROFILE: error but keeping session", String(err)));
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (event === "SIGNED_OUT") {
+        setSession(null);
+        setRole("granjeiro");
+        setProfiles([]);
+        setLoading(false);
+        return;
+      }
+
+      // TOKEN_REFRESHED, USER_UPDATED — update token silently, never redirect
+      if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        if (nextSession) setSession(nextSession);
+        return;
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -493,27 +615,37 @@ function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [session?.user?.id, session?.user?.email]);
 
-  async function signIn(email: string, password: string) {
+  async function signIn(email: string, password: string): Promise<Session | null> {
     if (!supabase) throw new Error("Configure o Supabase no arquivo .env para entrar.");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    // onAuthStateChange SIGNED_IN fires before this resolves and handles setSession + profile.
+    // Belt-and-suspenders: also set session here so UI updates immediately.
+    if (data.session) setSession(data.session);
+    return data.session;
   }
 
-  async function signUp(email: string, password: string) {
+  async function signUp(email: string, password: string): Promise<Session | null> {
     if (!supabase) throw new Error("Configure o Supabase no arquivo .env para criar conta.");
     const redirectUrl = `${window.location.origin}/#/login`;
-    const { data, error } = await supabase.auth.signUp(
-      { email, password },
-      { emailRedirectTo: redirectUrl },
-    );
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: redirectUrl },
+    });
     if (error) throw error;
-    return data;
+    // onAuthStateChange handles session + profile creation.
+    if (data.session) setSession(data.session);
+    return data.session;
   }
 
   async function signOut() {
     if (!supabase) return;
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
+    setSession(null);
+    setRole("granjeiro");
+    setProfiles([]);
   }
 
   async function refreshProfiles() {
@@ -583,7 +715,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     isDemoMode ? loadFromStorage(storageKeys.sales, [], isEggSaleList) : [],
   );
   const [inventory, setInventory] = useState<InventoryItem[]>(() =>
-    isDemoMode ? loadFromStorage(storageKeys.inventory, [], isInventoryList) : [],
+    isDemoMode ? normalizeInventory(loadFromStorage(storageKeys.inventory, [], isInventoryList)) : normalizeInventory([]),
   );
   const [isLoading, setIsLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -735,7 +867,7 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     setRecords([]);
     setFinancialRecords([]);
     setSales([]);
-    setInventory([]);
+    setInventory(normalizeInventory([]));
     [storageKeys.records, storageKeys.finance, storageKeys.sales, storageKeys.inventory].forEach((key) => window.localStorage.removeItem(key));
   }
 
@@ -862,10 +994,10 @@ function useFarmData() {
 }
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { user, loading, roleLoading } = useAuth();
+  const { user, loading } = useAuth();
   const location = useLocation();
 
-  if (loading || (!isDemoMode && roleLoading)) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f7f2] px-4">
         <div className="animate-fade-in text-center">
@@ -917,8 +1049,8 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         await signIn(email, password);
         navigate(from, { replace: true });
       } else {
-        const data = await signUp(email, password);
-        if (data?.session) {
+        const session = await signUp(email, password);
+        if (session) {
           setMessage("Conta criada com sucesso. Você já está logado.");
           navigate(from, { replace: true });
         } else {
@@ -926,8 +1058,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Não foi possível acessar a conta. Confira os dados e tente novamente.";
-      setError(message);
+      setError(authFriendlyError(error));
     } finally {
       setSubmitting(false);
     }
@@ -982,7 +1113,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
             disabled={submitting || !isSupabaseConfigured}
             className="flex h-14 w-full items-center justify-center rounded-lg bg-farm-green px-5 text-base font-semibold text-white shadow-lg shadow-green-900/10 transition hover:bg-farm-ink disabled:cursor-not-allowed disabled:bg-stone-300"
           >
-            {submitting ? "Enviando..." : isLogin ? "Entrar" : "Criar conta"}
+            {submitting ? (isLogin ? "Entrando..." : "Criando conta...") : isLogin ? "Entrar" : "Criar conta"}
           </button>
         </form>
 
@@ -997,7 +1128,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
   );
 }
 
-function OnboardingModal({ onClose }: { onClose: () => void }) {
+function OnboardingModal({ onStartTour, onClose }: { onStartTour: () => void; onClose: () => void }) {
   const features = [
     { icon: Home, title: "Painel operacional", desc: "KPIs, alertas automáticos e gráficos em tempo real." },
     { icon: NotebookPen, title: "Registros diários", desc: "Lance produção, ração, água e temperatura por dia." },
@@ -1005,24 +1136,28 @@ function OnboardingModal({ onClose }: { onClose: () => void }) {
     { icon: Package, title: "Estoque", desc: "Ração, medicamentos, bandejas e alertas de reposição." },
     { icon: BarChart3, title: "Indicadores zootécnicos", desc: "Postura, conversão alimentar e mortalidade." },
     { icon: FileText, title: "Relatórios", desc: "Resumos diários, semanais, mensais e exportação CSV." },
-    { icon: Map, title: "Mapa da granja", desc: "Layout interativo com dados de cada área produtiva." },
+    { icon: MapIcon, title: "Mapa da granja", desc: "Layout interativo com dados de cada área produtiva." },
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-farm-ink/60 px-4 py-8 backdrop-blur-sm">
-      <div className="w-full max-w-2xl animate-fade-in overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <div className="bg-gradient-to-br from-farm-green to-farm-leaf px-8 py-10 text-white">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20">
-            <Tractor className="h-7 w-7" aria-hidden="true" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-farm-ink/45 px-4 py-6 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="relative flex max-h-[88vh] w-full max-w-xl animate-fade-in flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-stone-500 shadow-sm transition hover:bg-white hover:text-farm-ink"
+          aria-label="Fechar boas-vindas"
+        >
+          <X className="h-5 w-5" aria-hidden="true" />
+        </button>
+        <div className="bg-gradient-to-br from-farm-green to-farm-leaf px-6 py-6 pr-14 text-white">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-white/20">
+            <Tractor className="h-6 w-6" aria-hidden="true" />
           </div>
-          <h2 className="text-3xl font-bold">Bem-vindo ao GranjaApp</h2>
-          <p className="mt-2 text-lg text-white/80">Plataforma inteligente para gestão avícola</p>
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-sm font-medium">
-            <Sparkles className="h-4 w-4" aria-hidden="true" />
-            Dados simulados para apresentação comercial
-          </div>
+          <h2 className="text-2xl font-bold">Bem-vindo ao GranjaApp</h2>
+          <p className="mt-1 text-sm text-white/80">Plataforma inteligente para gestão avícola</p>
         </div>
-        <div className="px-8 py-6">
+        <div className="overflow-y-auto px-6 py-5">
           <p className="text-xs font-bold uppercase tracking-widest text-stone-400">O que você vai explorar</p>
           <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
             {features.map(({ icon: Icon, title, desc }) => (
@@ -1037,14 +1172,23 @@ function OnboardingModal({ onClose }: { onClose: () => void }) {
               </div>
             ))}
           </div>
-          <button
-            onClick={onClose}
-            className="mt-6 flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-farm-green text-base font-bold text-white shadow-lg shadow-green-900/20 transition hover:bg-farm-ink"
-          >
-            <Sparkles className="h-5 w-5" aria-hidden="true" />
-            Entrar na demonstração
-          </button>
-          <p className="mt-3 text-center text-xs text-stone-400">GranjaApp · Versão demonstrativa · Dados simulados</p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={onStartTour}
+              className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-farm-green text-base font-bold text-white shadow-lg shadow-green-900/20 transition hover:bg-farm-ink"
+            >
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+              Iniciar Tour
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-14 w-full items-center justify-center rounded-xl border border-stone-200 bg-white text-base font-bold text-stone-600 transition hover:border-farm-green hover:text-farm-green"
+            >
+              Ir para o sistema
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1162,9 +1306,11 @@ function AppShell() {
   const [resetToken, setResetToken] = useState("");
   const [resetError, setResetError] = useState("");
   const [isResetting, setIsResetting] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false);
   const { resetAllData } = useFarmData();
   const navigate = useNavigate();
   const visibleNavItems = getVisibleNavItems(role);
+  const onboardingKey = `${storageKeys.onboarding}.${user?.id ?? user?.email ?? "demo"}`;
 
   useEffect(() => {
     if (isDemoMode) saveToStorage(storageKeys.page, page);
@@ -1172,6 +1318,11 @@ function AppShell() {
   useEffect(() => {
     if (isDemoMode) saveToStorage(storageKeys.role, demoRole);
   }, [demoRole]);
+  useEffect(() => {
+    if (!window.localStorage.getItem(onboardingKey)) {
+      setShowWelcome(true);
+    }
+  }, [onboardingKey]);
   useEffect(() => {
     const routePage = pathToPage(location.pathname);
     if (routePage && !canAccessPage(role, routePage)) {
@@ -1202,6 +1353,12 @@ function AppShell() {
     setPage(allowedPage);
     setIsSidebarOpen(false);
     navigate(pageToPath(allowedPage));
+  }
+
+  function finishWelcome(nextPage?: Page) {
+    window.localStorage.setItem(onboardingKey, "true");
+    setShowWelcome(false);
+    if (nextPage) goToPage(nextPage);
   }
 
   function changeRole(nextRole: AccessRole) {
@@ -1294,6 +1451,13 @@ function AppShell() {
         onLogout={handleLogout}
       />
 
+      {showWelcome ? (
+        <OnboardingModal
+          onStartTour={() => finishWelcome("tutorials")}
+          onClose={() => finishWelcome()}
+        />
+      ) : null}
+
       <main className="mx-auto w-full max-w-7xl overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
         <div key={page} className="animate-fade-in">
           {page === "dashboard" ? <DashboardPage onNewRecord={() => goToPage("records")} /> : null}
@@ -1302,6 +1466,7 @@ function AppShell() {
           {page === "finance" ? <FinancePage /> : null}
           {page === "inventory" ? <InventoryPage /> : null}
           {page === "reports" ? <ReportsPage /> : null}
+          {page === "tutorials" ? <TutorialsPage /> : null}
           {page === "map" ? <FarmMapPage /> : null}
           {page === "settings" ? <SettingsPage role={role} onRoleChange={changeRole} onRequestReset={() => setShowResetConfirm(true)} /> : null}
           {page === "permissions" ? <PermissionsPage /> : null}
@@ -2151,10 +2316,16 @@ function FinancePage() {
 function InventoryPage() {
   const { inventory, updateInventoryItem } = useFarmData();
   const lowStock = inventory.filter((item) => item.status !== "normal");
+  const needsInitialStock = inventory.length > 0 && inventory.every((item) => item.quantidadeAtual <= 0);
 
   return (
     <div className="space-y-5">
-      {lowStock.length ? (
+      {needsInitialStock ? (
+        <section className="rounded-lg border border-stone-200 bg-white p-5 text-farm-ink shadow-panel">
+          <h2 className="text-lg font-semibold">Estoque inicial</h2>
+          <p className="mt-1 text-sm text-stone-500">Cadastre as quantidades iniciais do estoque</p>
+        </section>
+      ) : lowStock.length ? (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-amber-900">
           <h2 className="text-lg font-semibold">Alertas de estoque</h2>
           <p className="mt-1 text-sm">{lowStock.map((item) => item.nome).join(", ")} abaixo do nível mínimo planejado.</p>
@@ -2164,7 +2335,7 @@ function InventoryPage() {
       {inventory.length ? (
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {inventory.map((item) => (
-          <article key={item.id} className={`rounded-lg border p-5 shadow-panel ${statusClasses(item.status)}`}>
+          <article key={item.id} className={`rounded-lg border p-5 shadow-panel ${inventoryCardClasses(item)}`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold">{item.nome}</p>
@@ -2172,7 +2343,7 @@ function InventoryPage() {
               </div>
               <Package className="h-6 w-6" aria-hidden="true" />
             </div>
-            <p className="mt-3 text-sm font-medium">Mínimo: {formatNumber(item.estoqueMinimo)} {item.unidade} · {statusLabel(item.status)}</p>
+            <p className="mt-3 text-sm font-medium">Mínimo: {formatNumber(item.estoqueMinimo)} {item.unidade} · {inventoryStatusLabel(item)}</p>
             <div className="mt-4 grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest opacity-60">Atual</span>
@@ -2300,6 +2471,25 @@ function ReportsPage() {
     return rows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
   }
 
+  function reportRows(report: ReturnType<typeof buildReport>): Array<[string, string | number]> {
+    return [
+      ["Período", `${report.start} a ${report.end}`],
+      ["Total de ovos produzidos", formatNumber(report.totalOvos)],
+      ["Ovos quebrados", formatNumber(report.ovosQuebrados)],
+      ["Ovos comercializáveis", formatNumber(report.ovosComercializaveis)],
+      ["Mortalidade total", formatNumber(report.mortalidadeTotal)],
+      ["Descarte total", formatNumber(report.descarteTotal)],
+      ["Ração consumida", `${formatNumber(report.racaoConsumida, 1)} kg`],
+      ["Água consumida", `${formatNumber(report.aguaConsumida, 1)} L`],
+      ["Média de temperatura", `${formatNumber(report.temperaturaMedia, 1)} °C`],
+      ["Postura média", formatPercent(report.posturaMedia)],
+      ["Ração por dúzia", `${formatNumber(report.racaoPorDuzia, 2)} kg`],
+      ["Receita total", formatCurrency(report.receitaTotal)],
+      ["Custo total", formatCurrency(report.custoTotal)],
+      ["Lucro estimado", formatCurrency(report.lucroEstimado)],
+    ];
+  }
+
   return (
     <div className="space-y-5">
       <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel">
@@ -2349,7 +2539,7 @@ function ReportsPage() {
               {role === "empresario" ? "Exportações disponíveis para usuários empresários." : "Somente usuários empresários podem exportar relatórios."}
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             <button
               disabled={role !== "empresario"}
               onClick={() => exportCsv(`granjaapp-relatorio-semanal-${today}.csv`, reportToCsv(weeklyReport))}
@@ -2366,12 +2556,141 @@ function ReportsPage() {
               <Download className="h-5 w-5" aria-hidden="true" />
               Exportar CSV mensal
             </button>
-            <button disabled className="flex h-12 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-100 px-4 font-semibold text-stone-500">
+            <button
+              disabled={role !== "empresario"}
+              onClick={() => exportPdf("Relatório mensal GranjaApp", reportRows(monthlyReport))}
+              className="flex h-12 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-4 font-semibold text-stone-600 transition hover:border-farm-green hover:text-farm-green disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+            >
               <FileText className="h-5 w-5" aria-hidden="true" />
-              PDF em breve
+              Exportar PDF
             </button>
           </div>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function TutorialsPage() {
+  const tutorialSections = [
+    {
+      title: "Como registrar a produção diária",
+      icon: NotebookPen,
+      steps: [
+        "Acesse Registros e confira a data do lançamento.",
+        "Informe lote, ovos produzidos, ovos quebrados, mortalidade, descarte, ração, água e temperatura.",
+        "Salve o registro para atualizar os indicadores operacionais.",
+      ],
+    },
+    {
+      title: "Como acompanhar postura",
+      icon: TrendingUp,
+      steps: [
+        "Abra o Painel para ver a postura do dia em porcentagem.",
+        "Compare a produção real com a curva esperada do lote.",
+        "Use os alertas para identificar queda de produção rapidamente.",
+      ],
+    },
+    {
+      title: "Como controlar estoque",
+      icon: Package,
+      steps: [
+        "Entre em Estoque e cadastre as quantidades iniciais.",
+        "Ajuste o estoque mínimo conforme a rotina da granja.",
+        "Acompanhe os status Normal, Atenção, Crítico ou A cadastrar.",
+      ],
+    },
+    {
+      title: "Como exportar relatórios semanais",
+      icon: Download,
+      steps: [
+        "Acesse Relatórios e escolha a semana desejada.",
+        "Revise ovos, mortalidade, ração, receita, custo e lucro do período.",
+        "Clique em Exportar CSV semanal ou gere o PDF para impressão.",
+      ],
+    },
+    {
+      title: "Como exportar relatórios mensais",
+      icon: FileText,
+      steps: [
+        "Escolha o mês no filtro de Relatórios.",
+        "Confira os totais consolidados para tomada de decisão.",
+        "Usuários Empresário podem exportar CSV mensal e PDF.",
+      ],
+    },
+    {
+      title: "Como cadastrar lotes",
+      icon: Layers3,
+      steps: [
+        "Abra Lotes e clique em Novo lote.",
+        "Preencha nome, data de alojamento, linhagem e quantidade de aves.",
+        "A idade, fase e produção esperada são calculadas automaticamente.",
+      ],
+    },
+    {
+      title: "Perfil Granjeiro",
+      icon: Feather,
+      steps: [
+        "Focado no lançamento diário da operação.",
+        "Acessa Registros para inserir dados de campo com rapidez.",
+        "Não visualiza financeiro, permissões ou configurações administrativas.",
+      ],
+    },
+    {
+      title: "Perfil Empresário",
+      icon: BadgeDollarSign,
+      steps: [
+        "Acessa painel completo, financeiro, estoque, relatórios e mapa.",
+        "Pode exportar relatórios e gerenciar permissões.",
+        "Usa os indicadores para acompanhar resultado técnico e econômico.",
+      ],
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm font-semibold text-farm-green">Bem-vindo ao GranjaApp</p>
+            <h2 className="mt-2 text-2xl font-bold text-farm-ink">Entenda a plataforma em menos de 5 minutos</h2>
+            <p className="mt-3 text-sm leading-6 text-stone-600">
+              O GranjaApp organiza a rotina da granja em registros diários, lotes, estoque, indicadores zootécnicos,
+              financeiro e relatórios. Use esta página como guia rápido para apresentar o sistema e orientar novos usuários.
+            </p>
+          </div>
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-farm-lime text-farm-green">
+            <Sparkles className="h-6 w-6" aria-hidden="true" />
+          </span>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {tutorialSections.map((section) => {
+          const Icon = section.icon;
+          return (
+            <article key={section.title} className="rounded-lg border border-stone-200 bg-white p-5 shadow-panel transition hover:-translate-y-0.5 hover:shadow-lg">
+              <div className="flex items-start gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-farm-lime text-farm-green">
+                  <Icon className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className="font-semibold text-farm-ink">{section.title}</h3>
+                  <ol className="mt-3 space-y-2 text-sm leading-6 text-stone-600">
+                    {section.steps.map((step, index) => (
+                      <li key={step} className="flex gap-2">
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-100 text-xs font-bold text-farm-green">
+                          {index + 1}
+                        </span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </section>
     </div>
   );
@@ -2386,7 +2705,7 @@ function FarmMapPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="flex items-center gap-2 text-sm font-medium text-farm-green">
-            <Map className="h-4 w-4" aria-hidden="true" />
+            <MapIcon className="h-4 w-4" aria-hidden="true" />
             Mapa da granja
           </p>
           <h2 className="mt-1 text-xl font-semibold">Layout operacional</h2>
@@ -2495,6 +2814,7 @@ function SettingsPage({
 function PermissionsPage() {
   const { role, profiles, profilesError, refreshProfiles, updateUserRole, user } = useAuth();
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [pendingRoles, setPendingRoles] = useState<Record<string, AccessRole>>({});
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -2503,7 +2823,36 @@ function PermissionsPage() {
     { id: "demo-admin-2", email: "phelipelavareda@hotmail.com", role: "empresario", isProtected: true },
     { id: "demo-granjeiro-1", email: "granjeiro@sitiodobem.com", role: "granjeiro", isProtected: false },
   ];
-  const visibleProfiles = isDemoMode ? demoProfiles : profiles;
+  const visibleProfiles = useMemo(() => {
+    if (isDemoMode) return demoProfiles;
+    const profileMap = new globalThis.Map<string, UserProfile>();
+    profiles.forEach((profile) => {
+      profileMap.set(profile.id, {
+        ...profile,
+        email: profile.email || (profile.id === user?.id ? user.email ?? "" : ""),
+        role: roleForEmail(profile.email || (profile.id === user?.id ? user.email : undefined), profile.role),
+      });
+    });
+    if (user && !profileMap.has(user.id)) {
+      profileMap.set(user.id, {
+        id: user.id,
+        email: user.email ?? "",
+        role: roleForEmail(user.email, role),
+        isProtected: protectedEmpresarioEmails.includes((user.email ?? "").trim().toLowerCase()),
+      });
+    }
+    protectedEmpresarioEmails.forEach((email) => {
+      if (![...profileMap.values()].some((profile) => (profile.email ?? "").toLowerCase() === email)) {
+        profileMap.set(`protected-${email}`, {
+          id: `protected-${email}`,
+          email,
+          role: "empresario",
+          isProtected: true,
+        });
+      }
+    });
+    return [...profileMap.values()];
+  }, [profiles, user?.id, user?.email, role]);
 
   useEffect(() => {
     if (!isDemoMode && role === "empresario") {
@@ -2511,7 +2860,12 @@ function PermissionsPage() {
     }
   }, [role]);
 
-  async function handleRoleChange(profile: UserProfile, nextRole: AccessRole) {
+  useEffect(() => {
+    setPendingRoles({});
+  }, [visibleProfiles.length]);
+
+  async function handleRoleSave(profile: UserProfile) {
+    const nextRole = pendingRoles[profile.id] ?? profile.role;
     setMessage("");
     setError("");
     if (profile.id === user?.id && nextRole !== "empresario") {
@@ -2522,7 +2876,12 @@ function PermissionsPage() {
       setError("Este email é protegido e deve permanecer como empresário.");
       return;
     }
+    if (nextRole === profile.role) {
+      setMessage("Nenhuma alteração pendente para este usuário.");
+      return;
+    }
     if (isDemoMode) {
+      setPendingRoles((current) => ({ ...current, [profile.id]: nextRole }));
       setMessage("Alteração simulada. Em produção, a permissão é salva na tabela profiles.");
       return;
     }
@@ -2530,6 +2889,11 @@ function PermissionsPage() {
     try {
       setSavingId(profile.id);
       await updateUserRole(profile, nextRole);
+      setPendingRoles((current) => {
+        const next = { ...current };
+        delete next[profile.id];
+        return next;
+      });
       setMessage("Permissão atualizada com sucesso.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível atualizar a permissão.");
@@ -2564,6 +2928,9 @@ function PermissionsPage() {
         {(error || profilesError) ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error || profilesError}</div> : null}
       </section>
 
+      {visibleProfiles.length === 0 ? (
+        <EmptyState icon={Pencil} title="Nenhum usuário encontrado" description="Assim que usuários criarem conta ou fizerem login, eles aparecerão nesta lista." />
+      ) : (
       <section className="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-panel">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-left text-sm">
@@ -2572,6 +2939,7 @@ function PermissionsPage() {
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Perfil atual</th>
                 <th className="px-4 py-3">Alterar perfil</th>
+                <th className="px-4 py-3">Ação</th>
                 <th className="px-4 py-3">Proteção</th>
               </tr>
             </thead>
@@ -2579,6 +2947,7 @@ function PermissionsPage() {
               {visibleProfiles.map((profile) => {
                 const isSelf = profile.id === user?.id;
                 const locked = Boolean(profile.isProtected) || isSelf;
+                const selectedRole = pendingRoles[profile.id] ?? profile.role;
                 return (
                   <tr key={profile.id}>
                     <td className="px-4 py-3 font-semibold">{profile.email || "Email não informado"}</td>
@@ -2589,14 +2958,24 @@ function PermissionsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <select
-                        value={profile.role}
+                        value={selectedRole}
                         disabled={savingId === profile.id || locked}
-                        onChange={(event) => handleRoleChange(profile, event.target.value as AccessRole)}
+                        onChange={(event) => setPendingRoles((current) => ({ ...current, [profile.id]: event.target.value as AccessRole }))}
                         className="table-input max-w-48 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
                       >
                         <option value="granjeiro">Granjeiro</option>
                         <option value="empresario">Empresário</option>
                       </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        disabled={savingId === profile.id || locked || selectedRole === profile.role}
+                        onClick={() => handleRoleSave(profile)}
+                        className="flex h-10 items-center justify-center rounded-lg bg-farm-green px-4 text-sm font-semibold text-white transition hover:bg-farm-ink disabled:cursor-not-allowed disabled:bg-stone-300"
+                      >
+                        {savingId === profile.id ? "Salvando..." : "Salvar"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-stone-500">
                       {profile.isProtected ? "Email protegido" : isSelf ? "Seu usuário" : "Editável"}
@@ -2608,6 +2987,7 @@ function PermissionsPage() {
           </table>
         </div>
       </section>
+      )}
     </div>
   );
 }
