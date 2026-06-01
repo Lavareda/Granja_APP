@@ -34,6 +34,8 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
         // Persist the session in localStorage so page refreshes keep the user logged in.
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storage: window.localStorage,
       },
     })
   : null;

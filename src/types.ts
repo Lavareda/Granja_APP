@@ -5,6 +5,7 @@ export type Page =
   | "finance"
   | "inventory"
   | "reports"
+  | "tutorials"
   | "map"
   | "settings"
   | "permissions";
@@ -48,6 +49,18 @@ export type Flock = {
   quantidadeInicial: number;
   quantidadeAtual: number;
   status: "ativo" | "observacao" | "encerrado";
+  /** Vacinas associadas ao lote */
+  vaccines?: Vaccine[];
+};
+
+export type Vaccine = {
+  id: number;
+  name: string;
+  recommendedWeeks: number;
+  dateScheduled?: string | null;
+  dateApplied?: string | null;
+  status: "prevista" | "aplicada" | "atrasada";
+  notes?: string;
 };
 
 export type FinancialRecord = {

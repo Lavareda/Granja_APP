@@ -19,6 +19,19 @@ export function roleForEmail(email?: string | null, fallback: AccessRole = "gran
   return isProtectedEmpresarioEmail(email) ? "empresario" : fallback;
 }
 
+function profileSelect() {
+  return "id, email, full_name, avatar_url, role, created_at, updated_at";
+}
+
+function friendlyProfileError(rawMessage: string): string {
+  // Log the raw technical detail for developers; never expose it in the UI.
+  console.error("PROFILE service error:", rawMessage);
+  if (rawMessage.includes("network") || rawMessage.includes("fetch")) {
+    return "Erro de conexão. Verifique sua internet e tente novamente.";
+  }
+  return "Não foi possível carregar as permissões. Tente novamente.";
+}
+
 function dbToProfile(row: DbProfile): UserProfile {
   const email = normalizeEmail(row.email);
   return {
@@ -30,33 +43,56 @@ function dbToProfile(row: DbProfile): UserProfile {
   };
 }
 
-export async function fetchOwnProfile(userId: string, email?: string | null): Promise<UserProfile> {
+export async function ensureOwnProfile(userId: string, email?: string | null): Promise<UserProfile> {
   if (!supabase) throw new Error("Supabase não configurado.");
 
-  const { data, error } = await supabase
+  const normalizedEmail = normalizeEmail(email);
+  const defaultRole = roleForEmail(normalizedEmail, "granjeiro");
+
+  const { data: existing, error: fetchError } = await supabase
     .from("profiles")
-    .select("id, email, full_name, avatar_url, role, created_at, updated_at")
+    .select(profileSelect())
     .eq("id", userId)
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
+  if (fetchError) throw new Error(friendlyProfileError(fetchError.message));
 
-  if (!data) {
-    return {
-      id: userId,
-      email: normalizeEmail(email),
-      role: roleForEmail(email),
-      isProtected: isProtectedEmpresarioEmail(email),
-    };
+  if (!existing) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .insert({ id: userId, email: normalizedEmail, role: defaultRole })
+      .select(profileSelect())
+      .single();
+
+    if (error) throw new Error(friendlyProfileError(error.message));
+    console.debug("profile created");
+    return dbToProfile(data as DbProfile);
   }
 
-  const profile = dbToProfile(data as DbProfile);
-  return {
-    ...profile,
-    email: profile.email || normalizeEmail(email),
-    role: roleForEmail(profile.email || email, profile.role),
-    isProtected: isProtectedEmpresarioEmail(profile.email || email),
-  };
+  const profile = dbToProfile(existing as DbProfile);
+  const nextRole = roleForEmail(normalizedEmail || profile.email, profile.role);
+  const nextEmail = normalizedEmail || profile.email;
+  const needsUpdate = profile.email !== nextEmail || profile.role !== nextRole;
+
+  if (!needsUpdate) {
+    console.debug("profile loaded");
+    return profile;
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ email: nextEmail, role: nextRole })
+    .eq("id", userId)
+    .select(profileSelect())
+    .single();
+
+  if (error) throw new Error(friendlyProfileError(error.message));
+  console.debug("profile loaded");
+  return dbToProfile(data as DbProfile);
+}
+
+export async function fetchOwnProfile(userId: string, email?: string | null): Promise<UserProfile> {
+  return ensureOwnProfile(userId, email);
 }
 
 export async function fetchProfiles(): Promise<UserProfile[]> {
@@ -64,10 +100,10 @@ export async function fetchProfiles(): Promise<UserProfile[]> {
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, email, full_name, avatar_url, role, created_at, updated_at")
+    .select(profileSelect())
     .order("email", { ascending: true });
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyProfileError(error.message));
   return ((data ?? []) as DbProfile[]).map(dbToProfile);
 }
 
@@ -82,9 +118,9 @@ export async function updateProfileRole(profile: UserProfile, role: AccessRole):
     .from("profiles")
     .update({ role: nextRole })
     .eq("id", profile.id)
-    .select("id, email, full_name, avatar_url, role, created_at, updated_at")
+    .select(profileSelect())
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendlyProfileError(error.message));
   return dbToProfile(data as DbProfile);
 }

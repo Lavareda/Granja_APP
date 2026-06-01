@@ -103,7 +103,7 @@ export async function fetchDailyRecords(userId: string): Promise<DailyRecord[]> 
     .order("record_date", { ascending: false });
 
   if (error) throw new Error(error.message);
-  return (data as DbDailyRecord[]).map(dbToRecord);
+  return ((data ?? []) as DbDailyRecord[]).map(dbToRecord);
 }
 
 /** Inserts a new daily record and returns the saved row. */
@@ -120,6 +120,7 @@ export async function insertDailyRecord(
     .single();
 
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Registro não retornado pelo servidor.");
   return dbToRecord(data as DbDailyRecord);
 }
 
@@ -151,6 +152,7 @@ export async function updateDailyRecord(
     .single();
 
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Registro não retornado pelo servidor.");
   return dbToRecord(data as DbDailyRecord);
 }
 

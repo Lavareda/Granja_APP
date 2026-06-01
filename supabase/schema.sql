@@ -110,6 +110,12 @@ set search_path = public as $$
   );
 $$;
 
+create or replace function public.profile_role(profile_id uuid)
+returns text language sql stable security definer
+set search_path = public as $$
+  select role from public.profiles where id = profile_id;
+$$;
+
 create or replace function public.enforce_protected_empresario()
 returns trigger language plpgsql as $$
 begin
@@ -155,11 +161,33 @@ alter table public.profiles enable row level security;
 
 drop policy if exists "Usuário vê próprio perfil" on public.profiles;
 drop policy if exists "Usuário atualiza próprio perfil" on public.profiles;
+drop policy if exists "Usuário cria próprio perfil" on public.profiles;
 drop policy if exists "Empresário vê todos os perfis" on public.profiles;
 drop policy if exists "Empresário atualiza papéis" on public.profiles;
 
 create policy "Usuário vê próprio perfil"
   on public.profiles for select using (auth.uid() = id);
+
+create policy "Usuário cria próprio perfil"
+  on public.profiles for insert
+  with check (
+    auth.uid() = id
+    and role = case
+      when public.is_protected_empresario_email(email) then 'empresario'
+      else 'granjeiro'
+    end
+  );
+
+create policy "Usuário atualiza próprio perfil"
+  on public.profiles for update
+  using (auth.uid() = id)
+  with check (
+    auth.uid() = id
+    and role = case
+      when public.is_protected_empresario_email(email) then 'empresario'
+      else public.profile_role(auth.uid())
+    end
+  );
 
 create policy "Empresário vê todos os perfis"
   on public.profiles for select using (public.is_empresario());

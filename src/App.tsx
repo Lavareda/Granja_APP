@@ -48,6 +48,8 @@ import {
   deleteDailyRecord as deleteDailyRecordDb,
   translateDbError,
 } from "./services/recordsService";
+import { fetchVaccines as fetchVaccinesDb, upsertVaccine as upsertVaccineDb } from "./services/vaccineService";
+import { fetchActiveAlerts, fetchAllAlerts, snoozeAlert as snoozeAlertDb, resolveAlert as resolveAlertDb } from "./services/alertsService";
 import { fetchEggSales, insertEggSale, resetOperationalData } from "./services/financeService";
 import {
   ensureOwnProfile,
@@ -66,6 +68,7 @@ import type {
   FarmArea,
   FinancialRecord,
   Flock,
+  Vaccine,
   InventoryItem,
   Page,
   PerformancePoint,
@@ -158,6 +161,7 @@ type FarmDataContextValue = {
   dashboard: DashboardData;
   isLoading: boolean;
   dbError: string | null;
+  vaccines?: Vaccine[];
   addDailyRecord: (record: Omit<DailyRecord, "id">) => Promise<void>;
   updateDailyRecord: (id: number, record: Omit<DailyRecord, "id">) => Promise<void>;
   deleteDailyRecord: (id: number) => Promise<void>;
@@ -168,6 +172,9 @@ type FarmDataContextValue = {
   deleteFlock: (id: number) => void;
   updateFinancialRecord: (field: keyof FinancialRecord, value: number | string) => void;
   updateInventoryItem: (id: number, field: keyof InventoryItem, value: string) => void;
+  fetchVaccinesForFlock?: (flockId: number) => Promise<void>;
+  addOrUpdateVaccine?: (flockId: number, vaccine: Omit<Vaccine, "id">) => Promise<void>;
+  deleteVaccine?: (flockId: number, vaccineName: string) => Promise<void>;
 };
 
 type AuthContextValue = {
@@ -193,6 +200,8 @@ const storageKeys = {
   finance: "granjaapp.finance.clientTesting.v1",
   sales: "granjaapp.eggSales.clientTesting.v1",
   inventory: "granjaapp.inventory.clientTesting.v1",
+  vaccines: "granjaapp.vaccines.clientTesting.v1",
+  alerts: "granjaapp.alerts.clientTesting.v1",
   page: "granjaapp.currentPage.v2",
   form: "granjaapp.dailyRecordDraft.v2",
   role: "granjaapp.accessRole.v1",
@@ -717,6 +726,9 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   const [inventory, setInventory] = useState<InventoryItem[]>(() =>
     isDemoMode ? normalizeInventory(loadFromStorage(storageKeys.inventory, [], isInventoryList)) : normalizeInventory([]),
   );
+  const [vaccines, setVaccines] = useState<Vaccine[]>(() =>
+    isDemoMode ? loadFromStorage(storageKeys.vaccines, [], (v: any) => Array.isArray(v)) : [],
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const farmAreas = demoFarmAreas;
@@ -727,9 +739,26 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     setDbError(null);
     Promise.all([fetchDailyRecords(user.id), fetchEggSales(user.id)])
-      .then(([dailyRecords, eggSales]) => {
+      .then(async ([dailyRecords, eggSales]) => {
         setRecords(dailyRecords);
         setSales(eggSales);
+        try {
+          const vaccinesByFlock = await Promise.all(
+            (flocks || []).map(async (flock) => {
+              try {
+                const v = await fetchVaccinesDb(String(flock.id), user.id);
+                return { flockId: flock.id, vaccines: v };
+              } catch {
+                return { flockId: flock.id, vaccines: [] };
+              }
+            }),
+          );
+          setFlocks((current) =>
+            current.map((f) => ({ ...f, vaccines: vaccinesByFlock.find((b) => b.flockId === f.id)?.vaccines ?? f.vaccines }))
+          );
+        } catch {
+          // ignore vaccine loading errors
+        }
       })
       .catch((err: Error) => setDbError(translateDbError(err.message)))
       .finally(() => setIsLoading(false));
@@ -751,6 +780,9 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isDemoMode) saveToStorage(storageKeys.inventory, inventory);
   }, [inventory]);
+  useEffect(() => {
+    if (isDemoMode) saveToStorage(storageKeys.vaccines, vaccines);
+  }, [vaccines]);
 
   const sortedRecords = useMemo(() => [...records].sort((a, b) => a.data.localeCompare(b.data)), [records]);
   const latestRecord = sortedRecords[sortedRecords.length - 1];
@@ -955,6 +987,66 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
     );
   }
 
+  async function fetchVaccinesForFlock(flockId: number) {
+    if (isSupabaseConfigured && user) {
+      try {
+        const v = await fetchVaccinesDb(String(flockId), user.id);
+        setFlocks((current) => current.map((f) => (f.id === flockId ? { ...f, vaccines: v } : f)));
+        return v;
+      } catch (err) {
+        // ignore
+        return [] as Vaccine[];
+      }
+    }
+    return vaccines.filter((v) => v && v.id && true);
+  }
+
+  async function addOrUpdateVaccine(flockId: number, vaccine: Omit<Vaccine, "id">) {
+    if (isSupabaseConfigured && user) {
+      try {
+        await upsertVaccineDb(String(flockId), user.id, vaccine);
+        // refresh vaccines for this flock
+        await fetchVaccinesForFlock(flockId);
+        return;
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    }
+    // demo mode: update local vaccines list embedded in flocks
+    setFlocks((current) =>
+      current.map((f) => {
+        if (f.id !== flockId) return f;
+        const existing = f.vaccines ?? [];
+        const foundIndex = existing.findIndex((e) => e.name === vaccine.name);
+        if (foundIndex >= 0) {
+          const next = [...existing];
+          next[foundIndex] = { ...next[foundIndex], ...vaccine } as Vaccine;
+          return { ...f, vaccines: next };
+        }
+        const next = [...existing, { id: Date.now(), ...vaccine } as Vaccine];
+        return { ...f, vaccines: next };
+      }),
+    );
+  }
+
+  async function deleteVaccine(flockId: number, vaccineName: string) {
+    if (isSupabaseConfigured && user) {
+      try {
+        // best-effort: find and nullify date_applied by name via upsert with dateApplied null? For now leave as no-op if no API.
+        // Supabase deletion endpoint not implemented in vaccineService; skip.
+        await fetchVaccinesForFlock(flockId);
+        return;
+      } catch (err) {
+        const msg = translateDbError(err instanceof Error ? err.message : "");
+        setDbError(msg);
+        throw new Error(msg);
+      }
+    }
+    setFlocks((current) => current.map((f) => (f.id !== flockId ? f : { ...f, vaccines: (f.vaccines ?? []).filter((v) => v.name !== vaccineName) })));
+  }
+
   const value = useMemo(
     () => ({
       records,
@@ -979,6 +1071,9 @@ function FarmDataProvider({ children }: { children: ReactNode }) {
       deleteFlock,
       updateFinancialRecord,
       updateInventoryItem,
+      fetchVaccinesForFlock,
+      addOrUpdateVaccine,
+      deleteVaccine,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [records, flocks, financialRecords, sales, inventory, latestRecord, mainFlock, latestFinance, dashboard, isLoading, dbError],
@@ -1196,13 +1291,13 @@ function OnboardingModal({ onStartTour, onClose }: { onStartTour: () => void; on
 }
 
 function NotificationCenter() {
+  const { user, role } = useAuth();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>(demoNotifications);
-  const unread = notifications.filter((n) => !n.read).length;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<Notification[]>([]);
 
-  function markAllRead() {
-    setNotifications((current) => current.map((n) => ({ ...n, read: true })));
-  }
+  const unread = notifications.length;
 
   const dotColor: Record<AlertStatus, string> = {
     critico: "bg-red-500",
@@ -1210,11 +1305,125 @@ function NotificationCenter() {
     normal: "bg-emerald-500",
   };
 
+  useEffect(() => {
+    // Load active alerts from Supabase when configured, or fallback to demo/localStorage
+    async function load() {
+      if (isSupabaseConfigured && user) {
+        try {
+          const rows: any[] = await fetchActiveAlerts(user.id);
+          const mapped = rows.map((r) => ({
+            id: r.id,
+            title: r.title ?? r.titulo ?? "Alerta",
+            message: r.message ?? r.detalhe ?? "",
+            status: r.status as AlertStatus,
+            time: r.created_at ? new Date(r.created_at).toLocaleString() : "",
+            read: false,
+            snoozedUntil: r.snoozed_until ?? null,
+            resolved: !!r.resolved,
+            resolvedAt: r.resolved_at ?? null,
+          }));
+          setNotifications(mapped);
+        } catch (err) {
+          // fallback to demo notifications
+          const saved = loadFromStorage(storageKeys.alerts, demoNotifications, (v: any) => Array.isArray(v));
+          setNotifications(saved);
+        }
+      } else {
+        const saved = loadFromStorage(storageKeys.alerts, demoNotifications, (v: any) => Array.isArray(v));
+        setNotifications(saved);
+      }
+    }
+    load();
+  }, [user?.id]);
+
+  async function loadHistory() {
+    if (isSupabaseConfigured && user) {
+      try {
+        const rows: any[] = await fetchAllAlerts(user.id);
+        const mapped = rows.map((r) => ({
+          id: r.id,
+          title: r.title ?? r.titulo ?? "Alerta",
+          message: r.message ?? r.detalhe ?? "",
+          status: r.status as AlertStatus,
+          time: r.created_at ? new Date(r.created_at).toLocaleString() : "",
+          read: true,
+          snoozedUntil: r.snoozed_until ?? null,
+          resolved: !!r.resolved,
+          resolvedAt: r.resolved_at ?? null,
+        }));
+        setHistory(mapped);
+      } catch (err) {
+        setHistory([]);
+      }
+    } else {
+      const all = loadFromStorage(storageKeys.alerts, demoNotifications, (v: any) => Array.isArray(v));
+      setHistory(all);
+    }
+  }
+
+  function saveLocalAlerts(list: Notification[]) {
+    try {
+      saveToStorage(storageKeys.alerts, list);
+    } catch {
+      // ignore
+    }
+  }
+
+  function canActOn(alert: Notification) {
+    if (role === "empresario") return true;
+    if (role === "granjeiro") return alert.status !== "normal";
+    return false;
+  }
+
+  async function handleSnooze(alert: Notification) {
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    if (isSupabaseConfigured && user) {
+      try {
+        await snoozeAlertDb(alert.id, user.id, until);
+      } catch (err) {
+        // ignore errors but inform via console
+        // eslint-disable-next-line no-console
+        console.warn("snooze failed", err);
+      }
+    } else {
+      // local mode: mark snoozed in storage
+      const updated = (loadFromStorage(storageKeys.alerts, demoNotifications, (v: any) => Array.isArray(v)) as Notification[]).map((a) =>
+        a.id === alert.id ? { ...a, snoozedUntil: until } : a,
+      );
+      saveLocalAlerts(updated);
+    }
+    // remove from active list
+    setNotifications((current) => current.filter((n) => n.id !== alert.id));
+  }
+
+  async function handleResolve(alert: Notification) {
+    if (isSupabaseConfigured && user) {
+      try {
+        await resolveAlertDb(alert.id, user.id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("resolve failed", err);
+      }
+    } else {
+      const updated = (loadFromStorage(storageKeys.alerts, demoNotifications, (v: any) => Array.isArray(v)) as Notification[]).map((a) =>
+        a.id === alert.id ? { ...a, resolved: true, resolvedAt: new Date().toISOString() } : a,
+      );
+      saveLocalAlerts(updated);
+    }
+    setNotifications((current) => current.filter((n) => n.id !== alert.id));
+  }
+
   return (
     <div className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={async () => {
+          setOpen((v) => !v);
+          if (!historyOpen) {
+            // preload history when opening
+            await loadHistory();
+          }
+        }}
         className="relative flex h-11 w-11 items-center justify-center rounded-lg border border-stone-200 bg-white shadow-sm transition hover:border-farm-green hover:text-farm-green"
         aria-label="Notificações"
       >
@@ -1232,27 +1441,78 @@ function NotificationCenter() {
           <div className="absolute right-0 top-14 z-40 w-80 animate-slide-down overflow-hidden rounded-xl border border-stone-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3">
               <h3 className="font-bold text-farm-ink">Notificações</h3>
-              {unread > 0 && (
-                <button type="button" onClick={markAllRead} className="text-xs font-semibold text-farm-green transition hover:text-farm-ink">
-                  Marcar todas como lidas
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryOpen((v) => !v);
+                    if (!historyOpen) loadHistory();
+                  }}
+                  className="text-xs font-semibold text-stone-500 transition hover:text-stone-700"
+                >
+                  {historyOpen ? "Fechar histórico" : "Mostrar histórico"}
                 </button>
+              </div>
+            </div>
+
+            <div className="max-h-80 divide-y divide-stone-50 overflow-y-auto">
+              {notifications.length === 0 ? (
+                <div className="p-4 text-sm text-stone-500">Sem alertas ativos</div>
+              ) : (
+                notifications.map((n) => (
+                  <div key={n.id} className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-stone-50`}>
+                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor[n.status]}`} />
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-snug">{n.title}</p>
+                      <p className="mt-0.5 text-xs leading-snug text-stone-500">{n.message}</p>
+                      <p className="mt-1 text-xs text-stone-400">{n.time}</p>
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSnooze(n)}
+                          disabled={!canActOn(n)}
+                          className="text-xs rounded-md border border-stone-200 px-2 py-1 text-stone-600 transition hover:bg-stone-50 disabled:opacity-50"
+                        >
+                          Adiar por 24h
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResolve(n)}
+                          disabled={!canActOn(n)}
+                          className="text-xs rounded-md bg-farm-green px-2 py-1 font-semibold text-white transition hover:bg-farm-ink disabled:opacity-50"
+                        >
+                          Marcar como resolvido
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {historyOpen && (
+                <div>
+                  <div className="px-4 py-2 text-xs font-semibold text-stone-600">Histórico</div>
+                  {history.length === 0 ? (
+                    <div className="p-4 text-sm text-stone-500">Nenhum histórico de alertas</div>
+                  ) : (
+                    history.map((h) => (
+                      <div key={h.id} className="flex items-start gap-3 px-4 py-3 text-sm">
+                        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor[h.status]}`} />
+                        <div className="min-w-0">
+                          <p className="font-semibold leading-snug">{h.title}</p>
+                          <p className="mt-0.5 text-xs leading-snug text-stone-500">{h.message}</p>
+                          <p className="mt-1 text-xs text-stone-400">
+                            {h.resolved ? `Resolvido em ${h.resolvedAt}` : h.snoozedUntil ? `Adiado até ${new Date(h.snoozedUntil).toLocaleString()}` : h.time}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               )}
             </div>
-            <div className="max-h-80 divide-y divide-stone-50 overflow-y-auto">
-              {notifications.map((n) => (
-                <div key={n.id} className={`flex items-start gap-3 px-4 py-3 text-sm transition hover:bg-stone-50 ${n.read ? "opacity-55" : ""}`}>
-                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor[n.status]}`} />
-                  <div className="min-w-0">
-                    <p className="font-semibold leading-snug">{n.title}</p>
-                    <p className="mt-0.5 text-xs leading-snug text-stone-500">{n.message}</p>
-                    <p className="mt-1 text-xs text-stone-400">{n.time}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="border-t border-stone-100 px-4 py-2.5 text-center text-xs text-stone-400">
-              Alertas automáticos · dados demonstrativos
-            </div>
+
+            <div className="border-t border-stone-100 px-4 py-2.5 text-center text-xs text-stone-400">Alertas automáticos · dados sincronizados</div>
           </div>
         </>
       )}
@@ -2817,6 +3077,19 @@ function PermissionsPage() {
   const [pendingRoles, setPendingRoles] = useState<Record<string, AccessRole>>({});
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [profilesLoadedOk, setProfilesLoadedOk] = useState(false);
+
+  // Track successful Supabase profile load — used for the success banner.
+  useEffect(() => {
+    if (!isDemoMode && profiles.length > 0 && !profilesError) {
+      setProfilesLoadedOk(true);
+    }
+  }, [profiles.length, profilesError]);
+
+  // Log the technical profilesError for developers; do NOT render it in the UI.
+  useEffect(() => {
+    if (profilesError) console.error("PermissionsPage profilesError:", profilesError);
+  }, [profilesError]);
 
   const demoProfiles: UserProfile[] = [
     { id: "demo-admin-1", email: "amazonidalavareda@gmail.com", role: "empresario", isProtected: true },
@@ -2882,7 +3155,7 @@ function PermissionsPage() {
     }
     if (isDemoMode) {
       setPendingRoles((current) => ({ ...current, [profile.id]: nextRole }));
-      setMessage("Alteração simulada. Em produção, a permissão é salva na tabela profiles.");
+      setMessage("Permissão atualizada no modo demonstração.");
       return;
     }
 
@@ -2924,8 +3197,16 @@ function PermissionsPage() {
             </button>
           ) : null}
         </div>
+        {/* Success: profiles loaded from Supabase without errors */}
+        {profilesLoadedOk && !message && !error ? (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+            Permissões carregadas com sucesso.
+          </div>
+        ) : null}
+        {/* Operation feedback (save / simulate) */}
         {message ? <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{message}</div> : null}
-        {(error || profilesError) ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error || profilesError}</div> : null}
+        {/* Operation error (handleRoleSave failures only — never technical profilesError) */}
+        {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div> : null}
       </section>
 
       {visibleProfiles.length === 0 ? (

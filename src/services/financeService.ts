@@ -57,6 +57,7 @@ export async function insertEggSale(sale: Omit<EggSale, "id" | "supabaseId">, us
     .single();
 
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("Venda não retornada pelo servidor.");
   return dbToSale(data as DbEggSale);
 }
 
