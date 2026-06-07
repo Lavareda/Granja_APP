@@ -34,8 +34,14 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
         // Persist the session in localStorage so page refreshes keep the user logged in.
         persistSession: true,
         autoRefreshToken: true,
+        // Detect auth tokens/codes in URL (required for email confirmation PKCE callback).
         detectSessionInUrl: true,
         storage: window.localStorage,
+        // Explicit PKCE flow — required so that Supabase appends ?code= to the
+        // redirect URL as a real query param (window.location.search), not as a
+        // hash fragment. With HashRouter the hash is used for routing, so any
+        // token placed inside the hash would be invisible to detectSessionInUrl.
+        flowType: "pkce",
       },
     })
   : null;
