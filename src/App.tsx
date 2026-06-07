@@ -1268,13 +1268,45 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
 
 
         {!isSupabaseConfigured && (
-          <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800">
-            <p className="font-semibold">Configuração ausente</p>
-            <p className="mt-1">
-              As variáveis <code className="rounded bg-red-100 px-1 font-mono text-xs">VITE_SUPABASE_URL</code> e{" "}
-              <code className="rounded bg-red-100 px-1 font-mono text-xs">VITE_SUPABASE_ANON_KEY</code> não estão
-              definidas. Configure-as em{" "}
-              <strong>Site settings → Environment variables</strong> no painel do Netlify e faça um novo deploy.
+          <div className="mb-4 space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <p className="font-bold">⚠ Variáveis de ambiente não configuradas</p>
+            <p className="text-xs leading-relaxed">
+              O app precisa de duas variáveis no Netlify para ativar login e base de dados.
+            </p>
+
+            <div className="space-y-2 rounded-lg border border-amber-200 bg-white p-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Passo 1 — Netlify Dashboard</p>
+              <p className="text-xs">Site settings → Environment variables → Add a variable</p>
+              <div className="space-y-1.5">
+                <div className="rounded bg-stone-50 p-2 font-mono text-xs">
+                  <span className="text-farm-green">VITE_SUPABASE_URL</span>
+                  <br />
+                  <span className="text-stone-500">https://dkdazpdaefmgfzexhtko.supabase.co</span>
+                </div>
+                <div className="rounded bg-stone-50 p-2 font-mono text-xs">
+                  <span className="text-farm-green">VITE_SUPABASE_ANON_KEY</span>
+                  <br />
+                  <span className="text-stone-500">Supabase → Project Settings → API → anon public</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-amber-200 bg-white p-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Passo 2 — Supabase Dashboard</p>
+              <p className="mt-1 text-xs">Authentication → URL Configuration</p>
+              <ul className="mt-1 space-y-1 text-xs">
+                <li><span className="font-semibold">Site URL:</span> <code className="rounded bg-stone-100 px-1">https://sitiodobem.netlify.app</code></li>
+                <li><span className="font-semibold">Redirect URLs:</span> <code className="rounded bg-stone-100 px-1">https://sitiodobem.netlify.app/**</code></li>
+              </ul>
+            </div>
+
+            <div className="rounded-lg border border-amber-200 bg-white p-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Passo 3</p>
+              <p className="mt-1 text-xs">Netlify → Deploys → <strong>Trigger deploy</strong> (ou push para o git)</p>
+            </div>
+
+            <p className="text-xs text-amber-700">
+              Enquanto as variáveis não estão configuradas, o app funciona em <strong>modo demo</strong> com dados locais.
             </p>
           </div>
         )}
