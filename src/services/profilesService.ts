@@ -24,7 +24,6 @@ function profileSelect() {
 }
 
 function friendlyProfileError(rawMessage: string): string {
-  // Log the raw technical detail for developers; never expose it in the UI.
   console.error("PROFILE service error:", rawMessage);
   if (rawMessage.includes("network") || rawMessage.includes("fetch")) {
     return "Erro de conexão. Verifique sua internet e tente novamente.";
@@ -43,51 +42,57 @@ function dbToProfile(row: DbProfile): UserProfile {
   };
 }
 
+/**
+ * Creates or updates the profile for the given user.
+ *
+ * Uses upsert (not plain insert) so concurrent SIGNED_IN / INITIAL_SESSION
+ * events and retries never produce a duplicate-key error.
+ *
+ * Role assignment rules:
+ *   1. Protected emails always receive "empresario".
+ *   2. Existing "empresario" profiles are never downgraded.
+ *   3. All other new users receive "granjeiro".
+ */
 export async function ensureOwnProfile(userId: string, email?: string | null): Promise<UserProfile> {
   if (!supabase) throw new Error("Supabase não configurado.");
 
   const normalizedEmail = normalizeEmail(email);
-  const defaultRole = roleForEmail(normalizedEmail, "granjeiro");
 
+  // Read the current profile (if any) so we never downgrade an existing empresario.
   const { data: existing, error: fetchError } = await supabase
     .from("profiles")
     .select(profileSelect())
     .eq("id", userId)
     .maybeSingle();
 
-  if (fetchError) throw new Error(friendlyProfileError(fetchError.message));
-
-  if (!existing) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .insert({ id: userId, email: normalizedEmail, role: defaultRole })
-      .select(profileSelect())
-      .single();
-
-    if (error) throw new Error(friendlyProfileError(error.message));
-    console.debug("profile created");
-    return dbToProfile(data as DbProfile);
+  if (fetchError) {
+    // Non-fatal on a fresh signup — log and continue to upsert.
+    console.warn("PROFILE: fetch before upsert failed:", fetchError.message);
   }
 
-  const profile = dbToProfile(existing as DbProfile);
-  const nextRole = roleForEmail(normalizedEmail || profile.email, profile.role);
-  const nextEmail = normalizedEmail || profile.email;
-  const needsUpdate = profile.email !== nextEmail || profile.role !== nextRole;
+  const existingRole = (existing as DbProfile | null)?.role ?? null;
 
-  if (!needsUpdate) {
-    console.debug("profile loaded");
-    return profile;
-  }
+  // Determine the role to persist:
+  //   • Protected email  → always "empresario"
+  //   • Already empresario → keep "empresario" (no downgrade)
+  //   • Otherwise        → "granjeiro" (default for new users)
+  const roleToSet: AccessRole = isProtectedEmpresarioEmail(normalizedEmail)
+    ? "empresario"
+    : existingRole === "empresario"
+    ? "empresario"
+    : "granjeiro";
 
   const { data, error } = await supabase
     .from("profiles")
-    .update({ email: nextEmail, role: nextRole })
-    .eq("id", userId)
+    .upsert(
+      { id: userId, email: normalizedEmail || null, role: roleToSet },
+      { onConflict: "id" },
+    )
     .select(profileSelect())
     .single();
 
   if (error) throw new Error(friendlyProfileError(error.message));
-  console.debug("profile loaded");
+  console.debug("PROFILE: upserted", roleToSet);
   return dbToProfile(data as DbProfile);
 }
 

@@ -107,6 +107,7 @@ const demoNotifications: Notification[] = [
 
 type DailyRecordForm = {
   data: string;
+  hora: string;
   lote: string;
   ovosProduzidos: string;
   ovosQuebrados: string;
@@ -213,6 +214,7 @@ const storageKeys = {
 
 const initialForm: DailyRecordForm = {
   data: today,
+  hora: "",
   lote: "Lote A-2025",
   ovosProduzidos: "",
   ovosQuebrados: "",
@@ -223,6 +225,11 @@ const initialForm: DailyRecordForm = {
   temperatura: "",
   observacoes: "",
 };
+
+function currentTimeHHMM(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
 
 const initialSaleForm: EggSaleForm = {
   dataVenda: today,
@@ -283,6 +290,7 @@ const numericFields: Array<keyof DailyRecordForm> = [
 
 const fieldLabels: Record<keyof DailyRecordForm, string> = {
   data: "Data",
+  hora: "Hora",
   lote: "Lote",
   ovosProduzidos: "Ovos produzidos",
   ovosQuebrados: "Ovos quebrados",
@@ -639,14 +647,27 @@ function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signUp(email: string, password: string): Promise<Session | null> {
     if (!supabase) throw new Error("Configure o Supabase no arquivo .env para criar conta.");
-    const redirectUrl = `${window.location.origin}/#/login`;
+    // Use only the origin (no hash path) so Supabase appends ?code= as a real
+    // query param (window.location.search). With HashRouter the hash is for
+    // routing, so "/#/login?code=..." would hide the code from detectSessionInUrl.
+    const redirectUrl = window.location.origin;
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { emailRedirectTo: redirectUrl },
     });
+    // Auth errors (wrong email format, password too short, etc.) are surfaced to the UI.
     if (error) throw error;
-    // onAuthStateChange handles session + profile creation.
+
+    // Eagerly create/update the profile so the role is set before the first
+    // onAuthStateChange fires. Fire-and-forget: a profile failure must never
+    // block or reverse a successful auth signup.
+    if (data.user) {
+      ensureOwnProfile(data.user.id, data.user.email)
+        .then(() => console.log("PROFILE: created on signup"))
+        .catch((err) => console.error("PROFILE: upsert failed after signup (non-fatal):", String(err)));
+    }
+
     if (data.session) setSession(data.session);
     return data.session;
   }
@@ -1246,11 +1267,22 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
         </div>
 
 
+        {!isSupabaseConfigured && (
+          <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+            <p className="font-semibold">Configuração ausente</p>
+            <p className="mt-1">
+              As variáveis <code className="rounded bg-red-100 px-1 font-mono text-xs">VITE_SUPABASE_URL</code> e{" "}
+              <code className="rounded bg-red-100 px-1 font-mono text-xs">VITE_SUPABASE_ANON_KEY</code> não estão
+              definidas. Configure-as em{" "}
+              <strong>Site settings → Environment variables</strong> no painel do Netlify e faça um novo deploy.
+            </p>
+          </div>
+        )}
         {error ? <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div> : null}
         {message ? <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{message}</div> : null}
         <form onSubmit={handleAuthSubmit} className="space-y-4">
           <Field label="Email">
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@sitiodobem.com" className="field-input" />
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@sitiodobem.com" className="field-input" disabled={!isSupabaseConfigured} />
           </Field>
           <Field label="Senha">
             <div className="relative">
@@ -1260,6 +1292,7 @@ function AuthPage({ mode }: { mode: "login" | "signup" }) {
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Mínimo 6 caracteres"
                 className="field-input pr-12"
+                disabled={!isSupabaseConfigured}
               />
               <button
                 type="button"
@@ -1952,6 +1985,7 @@ function DailyRecordPage() {
 
   const [form, setForm] = useState<DailyRecordForm>(() => ({
     ...initialForm,
+    hora: currentTimeHHMM(),
   }));
   const [errors, setErrors] = useState<Partial<Record<keyof DailyRecordForm, string>>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1970,6 +2004,7 @@ function DailyRecordPage() {
   function validate() {
     const next: Partial<Record<keyof DailyRecordForm, string>> = {};
     if (!form.data) next.data = "Informe a data.";
+    if (!form.hora) next.hora = "Informe a hora.";
     if (!form.lote.trim()) next.lote = "Informe o lote.";
     numericFields.forEach((field) => {
       const v = form[field].trim();
@@ -1988,6 +2023,7 @@ function DailyRecordPage() {
 
     const payload = {
       data: form.data,
+      hora: form.hora || undefined,
       lote: form.lote,
       ovosProduzidos: parseNumber(form.ovosProduzidos),
       ovosQuebrados: parseNumber(form.ovosQuebrados),
@@ -2009,7 +2045,7 @@ function DailyRecordPage() {
         await addDailyRecord(payload);
         setSaved("create");
       }
-      setForm({ ...initialForm, data: form.data, lote: form.lote });
+      setForm({ ...initialForm, data: form.data, lote: form.lote, hora: currentTimeHHMM() });
     } catch {
       // error already stored in context dbError — shown in the banner below
     } finally {
@@ -2021,6 +2057,7 @@ function DailyRecordPage() {
     setEditingId(record.id);
     setForm({
       data: record.data,
+      hora: record.hora ?? "",
       lote: record.lote,
       ovosProduzidos: String(record.ovosProduzidos),
       ovosQuebrados: String(record.ovosQuebrados),
@@ -2038,7 +2075,7 @@ function DailyRecordPage() {
 
   function cancelEdit() {
     setEditingId(null);
-    setForm({ ...initialForm });
+    setForm({ ...initialForm, hora: currentTimeHHMM() });
     setErrors({});
     setSaved(null);
   }
@@ -2114,6 +2151,9 @@ function DailyRecordPage() {
           <Field label="Data" error={errors.data} tooltip="Data em que os dados foram coletados.">
             <input type="date" value={form.data} onChange={(e) => updateField("data", e.target.value)} className="field-input" />
           </Field>
+          <Field label="Hora" error={errors.hora} tooltip="Hora do registo — permite múltiplos lançamentos no mesmo dia.">
+            <input type="time" value={form.hora} onChange={(e) => updateField("hora", e.target.value)} className="field-input" />
+          </Field>
           <Field label="Lote" error={errors.lote} tooltip="Lote de aves ao qual este registro pertence.">
             <select value={form.lote} onChange={(e) => updateField("lote", e.target.value)} className="field-input">
               {flocks.length ? flocks.map((f) => <option key={f.id}>{f.nome}</option>) : <option>{form.lote || "Lote principal"}</option>}
@@ -2184,6 +2224,7 @@ function DailyRecordPage() {
                       </div>
                       <p className="text-sm text-stone-500">
                         {new Date(`${record.data}T00:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })}
+                        {record.hora && <span className="ml-1.5 rounded bg-stone-100 px-1.5 py-0.5 text-xs font-medium tabular-nums text-stone-500">{record.hora}</span>}
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-2">
@@ -2231,7 +2272,10 @@ function DailyRecordPage() {
                 <tbody className="divide-y divide-stone-100">
                   {sortedRecords.map((record) => (
                     <tr key={record.id} className={`transition ${editingId === record.id ? "bg-amber-50" : "hover:bg-stone-50"}`}>
-                      <td className="px-4 py-3 font-medium tabular-nums">{dateLabel(record.data)}</td>
+                      <td className="px-4 py-3 font-medium tabular-nums">
+                        {dateLabel(record.data)}
+                        {record.hora && <span className="ml-1.5 text-xs font-normal text-stone-400">{record.hora}</span>}
+                      </td>
                       <td className="px-4 py-3">{record.lote}</td>
                       <td className="px-4 py-3 tabular-nums">{formatNumber(record.ovosProduzidos)}</td>
                       <td className="px-4 py-3 tabular-nums">{formatPercent(calcularPostura(record.ovosProduzidos, activeBirds))}</td>

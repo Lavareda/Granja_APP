@@ -7,6 +7,14 @@
  *     will reject it because auth.uid() must match user_id.
  *   ▸ Never pass service_role key here — use the anon key only.
  *   ▸ Validate all required fields in callers BEFORE calling these functions.
+ *
+ * HORA / MULTIPLE ENTRIES PER DAY:
+ *   ▸ record_date is stored as "YYYY-MM-DDTHH:MM:SS" when a time is provided.
+ *     This makes each entry unique by datetime, bypassing any date-level
+ *     unique constraint, provided the column type is timestamp or text.
+ *     If the column is PostgreSQL date, run:
+ *       ALTER TABLE daily_records ALTER COLUMN record_date TYPE timestamp
+ *         USING record_date::timestamp;
  */
 
 import type { DailyRecord } from "../types";
@@ -17,14 +25,30 @@ import { supabase } from "../lib/supabase";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Splits a stored record_date ("YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS") into parts. */
+function parseRecordDate(raw: string): { data: string; hora: string | undefined } {
+  const tIdx = raw.indexOf("T");
+  if (tIdx !== -1) {
+    return { data: raw.slice(0, tIdx), hora: raw.slice(tIdx + 1, tIdx + 6) };
+  }
+  return { data: raw, hora: undefined };
+}
+
+/** Builds the record_date value to store. Hora is required. */
+function buildRecordDate(data: string, hora: string): string {
+  return `${data}T${hora}:00`;
+}
+
 /** Maps a database row to the frontend DailyRecord shape. */
 function dbToRecord(row: DbDailyRecord): DailyRecord {
+  const { data, hora } = parseRecordDate(row.record_date);
   return {
     // Convert UUID to a stable integer for internal React key usage.
     // We also keep the original UUID in supabaseId for CRUD operations.
     id: uuidToLocalId(row.id),
     supabaseId: row.id,
-    data: row.record_date,
+    data,
+    hora,
     lote: row.lote_name,
     ovosProduzidos: row.eggs_produced,
     ovosQuebrados: row.eggs_broken,
@@ -47,7 +71,7 @@ function recordToInsert(
     farm_id: null,
     flock_id: null,
     lote_name: record.lote,
-    record_date: record.data,
+    record_date: record.hora ? buildRecordDate(record.data, record.hora) : record.data,
     eggs_produced: record.ovosProduzidos,
     eggs_broken: record.ovosQuebrados,
     mortality: record.mortalidade,
@@ -75,7 +99,7 @@ function uuidToLocalId(uuid: string): number {
  */
 export function translateDbError(message: string): string {
   if (message.includes("unique") || message.includes("duplicate"))
-    return "Já existe um registro para este lote nesta data.";
+    return "Já existe um registro para este lote neste horário.";
   if (message.includes("network") || message.includes("fetch"))
     return "Erro de conexão. Verifique sua internet e tente novamente.";
   if (message.includes("JWT") || message.includes("invalid claim"))
@@ -136,7 +160,7 @@ export async function updateDailyRecord(
     .from("daily_records")
     .update({
       lote_name: record.lote,
-      record_date: record.data,
+      record_date: record.hora ? buildRecordDate(record.data, record.hora) : record.data,
       eggs_produced: record.ovosProduzidos,
       eggs_broken: record.ovosQuebrados,
       mortality: record.mortalidade,

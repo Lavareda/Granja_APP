@@ -30,6 +30,8 @@ export type DailyRecord = {
   /** Supabase UUID — present when the record was loaded from or saved to the database. */
   supabaseId?: string;
   data: string;
+  /** Hora do registo no formato HH:MM — extraída do prefixo [HH:MM] nas notes do DB. */
+  hora?: string;
   lote: string;
   ovosProduzidos: number;
   ovosQuebrados: number;
